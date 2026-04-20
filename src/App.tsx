@@ -4,7 +4,7 @@ import {
   List, X, Percent, Info, ArrowUpDown, 
   ChevronUp, ChevronDown, Check, Calendar,
   Stethoscope, History, Edit2, FileText, FlaskConical,
-  BarChart2, MoreHorizontal, Gift, Receipt, Undo,
+  BarChart2, MoreHorizontal, Gift, Receipt, Undo, Star,
   Moon, Sun, Wallet, Activity, CheckCircle2, Clock, XCircle, ArrowRightLeft, Filter, PieChart, ShoppingCart
 } from 'lucide-react';
 
@@ -88,6 +88,11 @@ interface Patient {
   transferDoctor?: string;
   transferReason?: string;
   cancelReason?: string;
+  postponeReason?: string;
+  postponeDate?: string;
+  prognosisRating?: number;
+  patientSatisfaction?: number;
+  doneNotes?: string;
   visits: Visit[];
   status?: 'ongoing' | 'done' | 'postponed' | 'canceled' | 'transferred';
 }
@@ -219,6 +224,7 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [noteConfirmed, setNoteConfirmed] = useState(false);
   const [isEditingPatientDetails, setIsEditingPatientDetails] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   
@@ -426,13 +432,6 @@ export default function App() {
     }
 
     const updatedPatient = { ...selectedPatient, status: newStatus };
-    if (newStatus !== 'transferred') {
-      updatedPatient.transferDoctor = undefined;
-      updatedPatient.transferReason = undefined;
-    }
-    if (newStatus !== 'canceled') {
-      updatedPatient.cancelReason = undefined;
-    }
     setSelectedPatient(updatedPatient);
     setPatients(prev => prev.map(p => p.id === updatedPatient.id ? updatedPatient : p));
     setShowStatusDetails(true);
@@ -1338,27 +1337,144 @@ export default function App() {
                       <div className="flex flex-1 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden">
                         <button onClick={() => handleStatusChange('ongoing')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex items-center justify-center gap-1 ${selectedPatient.status === 'ongoing' || !selectedPatient.status ? 'bg-blue-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}><Activity size={10} /> مستمرة</button>
                           <div className="w-px bg-gray-200 dark:bg-gray-600"></div>
-                          <button onClick={() => handleStatusChange('done')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex items-center justify-center gap-1 ${selectedPatient.status === 'done' ? 'bg-emerald-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}><CheckCircle2 size={10} /> مكتملة</button>
+                          <button onClick={() => handleStatusChange('done')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex flex-col items-center justify-center relative ${selectedPatient.status === 'done' ? 'bg-emerald-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
+                            <div className="flex items-center gap-1"><CheckCircle2 size={10} /> مكتملة</div>
+                            {selectedPatient.status === 'done' && (showStatusDetails ? <ChevronUp size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} /> : <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />)}
+                          </button>
                           <div className="w-px bg-gray-200 dark:bg-gray-600"></div>
-                          <button onClick={() => handleStatusChange('postponed')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex items-center justify-center gap-1 ${selectedPatient.status === 'postponed' ? 'bg-amber-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}><Clock size={10} /> مؤجلة</button>
+                          <button onClick={() => handleStatusChange('postponed')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex flex-col items-center justify-center relative ${selectedPatient.status === 'postponed' ? 'bg-amber-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
+                            <div className="flex items-center gap-1"><Clock size={10} /> مؤجلة</div>
+                            {selectedPatient.status === 'postponed' && (showStatusDetails ? <ChevronUp size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} /> : <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />)}
+                          </button>
                           <div className="w-px bg-gray-200 dark:bg-gray-600"></div>
                           <button onClick={() => handleStatusChange('transferred')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex flex-col items-center justify-center relative ${selectedPatient.status === 'transferred' ? 'bg-purple-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
                             <div className="flex items-center gap-1"><ArrowRightLeft size={10} /> محولة</div>
-                            {selectedPatient.status === 'transferred' && !showStatusDetails && <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />}
+                            {selectedPatient.status === 'transferred' && (showStatusDetails ? <ChevronUp size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} /> : <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />)}
                           </button>
                           <div className="w-px bg-gray-200 dark:bg-gray-600"></div>
                           <button onClick={() => handleStatusChange('canceled')} className={`flex-1 py-1.5 text-[10px] font-bold transition-colors flex flex-col items-center justify-center relative ${selectedPatient.status === 'canceled' ? 'bg-red-500 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600'}`}>
                             <div className="flex items-center gap-1"><XCircle size={10} /> ملغية</div>
-                            {selectedPatient.status === 'canceled' && !showStatusDetails && <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />}
+                            {selectedPatient.status === 'canceled' && (showStatusDetails ? <ChevronUp size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} /> : <ChevronDown size={8} className="absolute bottom-[2px] opacity-80" strokeWidth={3} />)}
                           </button>
                         </div>
                       </div>
-                      
-                      {selectedPatient.status === 'transferred' && showStatusDetails && (
-                        <div className="mt-2 animate-fade-in flex gap-2">
-                          <div className="relative flex-1">
+
+                      {selectedPatient.status === 'done' && showStatusDetails && (
+                        <div className="mt-2 animate-fade-in bg-emerald-50/50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-800/60 rounded-xl p-2 flex flex-col gap-2">
+                          <div className="flex gap-2">
+                            <div className="flex-1 flex flex-col items-center justify-center bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-800/50 rounded-lg py-1.5 shadow-sm">
+                              <span className="text-[9px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">تقييم المعالجة (Prognosis)</span>
+                              <div className="flex gap-0.5" dir="ltr">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star 
+                                    key={star} 
+                                    size={16} 
+                                    className={`cursor-pointer transition-all ${star <= (selectedPatient.prognosisRating || 0) ? 'text-amber-400 fill-amber-400 drop-shadow-sm' : 'text-gray-300 dark:text-gray-600 hover:text-amber-200'}`} 
+                                    onClick={() => {
+                                      if (selectedPatient.prognosisRating === star) {
+                                        const updated = { ...selectedPatient, prognosisRating: 0 };
+                                        setSelectedPatient(updated);
+                                        setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                                      } else {
+                                        const updated = { ...selectedPatient, prognosisRating: star };
+                                        setSelectedPatient(updated);
+                                        setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                                      }
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            
+                            <div className="flex-1 flex flex-col items-center justify-center bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-800/50 rounded-lg py-1.5 shadow-sm">
+                              <span className="text-[9px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">رضى المريض</span>
+                              <div className="flex gap-0.5" dir="ltr">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star 
+                                    key={star} 
+                                    size={16} 
+                                    className={`cursor-pointer transition-all ${star <= (selectedPatient.patientSatisfaction || 0) ? 'text-amber-400 fill-amber-400 drop-shadow-sm' : 'text-gray-300 dark:text-gray-600 hover:text-amber-200'}`} 
+                                    onClick={() => {
+                                      if (selectedPatient.patientSatisfaction === star) {
+                                        const updated = { ...selectedPatient, patientSatisfaction: 0 };
+                                        setSelectedPatient(updated);
+                                        setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                                      } else {
+                                        const updated = { ...selectedPatient, patientSatisfaction: star };
+                                        setSelectedPatient(updated);
+                                        setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                                      }
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Notes field for done status */}
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-emerald-200 dark:focus-within:ring-emerald-900/50 transition-all">
+                            <FileText size={14} className="text-emerald-400 rtl:ml-2 ltr:mr-2 shrink-0" />
                             <input 
-                              id="transferDoctorInput"
+                              type="text" 
+                              placeholder="ملاحظات.." 
+                              value={selectedPatient.doneNotes || ''}
+                              onChange={(e) => {
+                                const updated = { ...selectedPatient, doneNotes: e.target.value };
+                                setSelectedPatient(updated);
+                                setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                                setNoteConfirmed(false);
+                              }}
+                              className="w-full bg-transparent border-none outline-none text-xs text-emerald-800 dark:text-emerald-300 placeholder-emerald-300 dark:placeholder-emerald-500/70"
+                            />
+                            {selectedPatient.doneNotes && selectedPatient.doneNotes.trim().length > 0 && !noteConfirmed && (
+                              <Check 
+                                size={14} 
+                                className="text-emerald-500 shrink-0 rtl:mr-1 ltr:ml-1 animate-in zoom-in duration-200 cursor-pointer hover:text-emerald-600 transition-colors" 
+                                onClick={() => setNoteConfirmed(true)}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedPatient.status === 'postponed' && showStatusDetails && (
+                        <div className="mt-2 animate-fade-in bg-amber-50/50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800/60 rounded-xl p-2 flex gap-2">
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-amber-100 dark:border-amber-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-amber-200 dark:focus-within:ring-amber-900/50 transition-all">
+                            <Calendar size={14} className="text-amber-500 rtl:ml-2 ltr:mr-2 shrink-0" />
+                            <input 
+                              type="text" 
+                              placeholder="موعد الاستكمال..." 
+                              value={selectedPatient.postponeDate || ''}
+                              onChange={(e) => {
+                                const updated = { ...selectedPatient, postponeDate: e.target.value };
+                                setSelectedPatient(updated);
+                                setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                              }}
+                              className="w-full bg-transparent border-none outline-none text-xs text-amber-900 dark:text-amber-100 placeholder-amber-400/80 dark:placeholder-amber-600/70"
+                            />
+                          </div>
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-amber-100 dark:border-amber-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-amber-200 dark:focus-within:ring-amber-900/50 transition-all">
+                            <Clock size={14} className="text-amber-500 rtl:ml-2 ltr:mr-2 shrink-0" />
+                            <input 
+                              type="text" 
+                              placeholder="سبب التأجيل..." 
+                              value={selectedPatient.postponeReason || ''}
+                              onChange={(e) => {
+                                const updated = { ...selectedPatient, postponeReason: e.target.value };
+                                setSelectedPatient(updated);
+                                setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
+                              }}
+                              className="w-full bg-transparent border-none outline-none text-xs text-amber-900 dark:text-amber-100 placeholder-amber-400/80 dark:placeholder-amber-600/70"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedPatient.status === 'transferred' && showStatusDetails && (
+                        <div className="mt-2 animate-fade-in bg-purple-50/50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800/60 rounded-xl p-2 flex gap-2">
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-purple-100 dark:border-purple-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-purple-200 dark:focus-within:ring-purple-900/50 transition-all">
+                            <Stethoscope size={14} className="text-purple-400 rtl:ml-2 ltr:mr-2 shrink-0" />
+                            <input 
                               type="text" 
                               placeholder="إسم الطبيب المحول إليه..." 
                               value={selectedPatient.transferDoctor || ''}
@@ -1367,13 +1483,12 @@ export default function App() {
                                 setSelectedPatient(updated);
                                 setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
                               }}
-                              className="peer w-full text-xs border border-purple-200 dark:border-purple-800 bg-transparent text-gray-800 dark:text-gray-100 rounded-xl py-2 px-2.5 focus:border-purple-500 outline-none placeholder-transparent placeholder-purple-300 dark:placeholder-purple-700 transition-colors"
+                              className="w-full bg-transparent border-none outline-none text-xs text-gray-800 dark:text-gray-100 placeholder-purple-300 dark:placeholder-purple-500/70"
                             />
-                            <label htmlFor="transferDoctorInput" className="font-bold absolute right-2 px-1 transition-all duration-200 pointer-events-none text-purple-500 dark:text-purple-400 -top-2 text-[9px] bg-gray-50 dark:bg-[#313b4b] peer-placeholder-shown:top-2 peer-placeholder-shown:text-xs peer-placeholder-shown:bg-transparent peer-focus:-top-2 peer-focus:text-[9px] peer-focus:bg-gray-50 peer-focus:dark:bg-[#313b4b] after:content-['...'] after:opacity-0 peer-placeholder-shown:after:opacity-100 peer-focus:after:opacity-0">الطبيب المحول إليه</label>
                           </div>
-                          <div className="relative flex-1">
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-purple-100 dark:border-purple-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-purple-200 dark:focus-within:ring-purple-900/50 transition-all">
+                            <FileText size={14} className="text-purple-400 rtl:ml-2 ltr:mr-2 shrink-0" />
                             <input 
-                              id="transferReasonInput"
                               type="text" 
                               placeholder="سبب التحويل..." 
                               value={selectedPatient.transferReason || ''}
@@ -1382,18 +1497,17 @@ export default function App() {
                                 setSelectedPatient(updated);
                                 setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
                               }}
-                              className="peer w-full text-xs border border-purple-200 dark:border-purple-800 bg-transparent text-gray-800 dark:text-gray-100 rounded-xl py-2 px-2.5 focus:border-purple-500 outline-none placeholder-transparent placeholder-purple-300 dark:placeholder-purple-700 transition-colors"
+                              className="w-full bg-transparent border-none outline-none text-xs text-gray-800 dark:text-gray-100 placeholder-purple-300 dark:placeholder-purple-500/70"
                             />
-                            <label htmlFor="transferReasonInput" className="font-bold absolute right-2 px-1 transition-all duration-200 pointer-events-none text-purple-500 dark:text-purple-400 -top-2 text-[9px] bg-gray-50 dark:bg-[#313b4b] peer-placeholder-shown:top-2 peer-placeholder-shown:text-xs peer-placeholder-shown:bg-transparent peer-focus:-top-2 peer-focus:text-[9px] peer-focus:bg-gray-50 peer-focus:dark:bg-[#313b4b] after:content-['...'] after:opacity-0 peer-placeholder-shown:after:opacity-100 peer-focus:after:opacity-0">سبب التحويل</label>
                           </div>
                         </div>
                       )}
 
                       {selectedPatient.status === 'canceled' && showStatusDetails && (
-                        <div className="mt-2 animate-fade-in flex gap-2">
-                          <div className="relative flex-1">
+                        <div className="mt-2 animate-fade-in bg-red-50/50 dark:bg-red-900/20 border border-red-100 dark:border-red-800/60 rounded-xl p-2 flex">
+                          <div className="flex-1 flex items-center bg-white dark:bg-gray-800 border border-red-100 dark:border-red-800/50 rounded-lg px-2 py-1.5 shadow-sm focus-within:ring-2 focus-within:ring-red-200 dark:focus-within:ring-red-900/50 transition-all">
+                            <Info size={14} className="text-red-400 rtl:ml-2 ltr:mr-2 shrink-0" />
                             <input 
-                              id="cancelReasonInput"
                               type="text" 
                               placeholder="سبب الإلغاء..." 
                               value={selectedPatient.cancelReason || ''}
@@ -1402,9 +1516,8 @@ export default function App() {
                                 setSelectedPatient(updated);
                                 setPatients(prev => prev.map(p => p.id === updated.id ? updated : p));
                               }}
-                              className="peer w-full text-xs border border-red-200 dark:border-red-800 bg-transparent text-gray-800 dark:text-gray-100 rounded-xl py-2 px-2.5 focus:border-red-500 outline-none placeholder-transparent placeholder-red-300 dark:placeholder-red-700 transition-colors"
+                              className="w-full bg-transparent border-none outline-none text-xs text-gray-800 dark:text-gray-100 placeholder-red-300 dark:placeholder-red-500/70"
                             />
-                            <label htmlFor="cancelReasonInput" className="font-bold absolute right-2 px-1 transition-all duration-200 pointer-events-none text-red-500 dark:text-red-400 -top-2 text-[9px] bg-gray-50 dark:bg-[#313b4b] peer-placeholder-shown:top-2 peer-placeholder-shown:text-xs peer-placeholder-shown:bg-transparent peer-focus:-top-2 peer-focus:text-[9px] peer-focus:bg-gray-50 peer-focus:dark:bg-[#313b4b] after:content-['...'] after:opacity-0 peer-placeholder-shown:after:opacity-100 peer-focus:after:opacity-0">سبب الإلغاء</label>
                           </div>
                         </div>
                       )}
