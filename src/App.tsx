@@ -4,7 +4,7 @@ import {
   List, X, Percent, Info, ArrowUpDown, 
   ChevronUp, ChevronDown, Check, Calendar,
   Stethoscope, History, Edit2, FileText, FlaskConical,
-  BarChart2, MoreHorizontal, Gift, Receipt, Undo, Star,
+  BarChart2, MoreHorizontal, Gift, Receipt, Undo, Star, MoreVertical, Download, Upload,
   Moon, Sun, Wallet, Activity, CheckCircle2, Clock, XCircle, ArrowRightLeft, Filter, PieChart, ShoppingCart
 } from 'lucide-react';
 
@@ -230,6 +230,8 @@ export default function App() {
   
   const [reportModalType, setReportModalType] = useState('none');
   const [showReports, setShowReports] = useState(false);
+  const [showAppSettings, setShowAppSettings] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showWithdrawals, setShowWithdrawals] = useState(false);
   const [highlightEditBtn, setHighlightEditBtn] = useState(false);
@@ -313,6 +315,14 @@ export default function App() {
         console.error('Error loading data', e);
       }
     }
+    const savedWithdrawals = localStorage.getItem('@patients_withdrawals_v1');
+    if (savedWithdrawals) {
+      try { setWithdrawals(JSON.parse(savedWithdrawals)); } catch (e) {}
+    }
+    const savedExpenses = localStorage.getItem('@patients_expenses_v1');
+    if (savedExpenses) {
+      try { setExpenses(JSON.parse(savedExpenses)); } catch (e) {}
+    }
   }, []);
 
   useEffect(() => {
@@ -322,6 +332,77 @@ export default function App() {
       console.error('Error saving data', e);
     }
   }, [patients]);
+
+  useEffect(() => {
+    try { localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(withdrawals)); } catch(e) {}
+  }, [withdrawals]);
+
+  useEffect(() => {
+    try { localStorage.setItem('@patients_expenses_v1', JSON.stringify(expenses)); } catch(e) {}
+  }, [expenses]);
+
+  const handleExportData = () => {
+    try {
+      const dataToExport = {
+        version: '1.2',
+        exportDate: new Date().toISOString(),
+        patients,
+        withdrawals,
+        expenses
+      };
+      
+      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(dataToExport));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute('href', dataStr);
+      
+      const dateObj = new Date();
+      const datePart = dateObj.toISOString().split('T')[0];
+      const timePart = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
+      const filename = `DentPro_${datePart}_${timePart}.json`;
+
+      downloadAnchorNode.setAttribute('download', filename);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+      setShowAppSettings(false);
+      showAlert('تم تصدير البيانات بنجاح في ملف للنسخ الاحتياطي.');
+    } catch (error) {
+      showAlert('حدث خطأ أثناء التصدير.');
+    }
+  };
+
+  const handleImportData = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedData = JSON.parse(e.target?.result as string);
+        if (importedData && importedData.patients && Array.isArray(importedData.patients)) {
+          showConfirm('هل أنت متأكد من استيراد هذه النسخة الاحتياطية؟ سيتم استبدال جميع البيانات الحالية.', () => {
+            // Restore backwards-compatible structure mapping
+            setPatients(importedData.patients || []);
+            setWithdrawals(importedData.withdrawals || []);
+            setExpenses(importedData.expenses || []);
+            
+            showAlert('تم استيراد البيانات واسترجاع النسخة الاحتياطية بنجاح!');
+            
+            // Allow resetting file input after successful import
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          });
+        } else {
+          showAlert('ملف النسخة الاحتياطية غير صالح أو غير مدعوم.');
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      } catch (error) {
+        showAlert('يوجد خطأ في محتوى الملف.');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+      setShowAppSettings(false);
+    };
+    reader.readAsText(file);
+  };
 
   const handleAddPatient = () => {
     if (isAdding) return;
@@ -802,12 +883,39 @@ export default function App() {
     <div dir="rtl" className={`min-h-screen ${isDarkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-[#f8f9fc] text-gray-900'} font-sans text-right flex justify-center selection:bg-indigo-100 transition-colors duration-300`}>
       <div className={`w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white dark:bg-gray-800'} min-h-screen relative shadow-2xl overflow-hidden flex flex-col transition-colors duration-300`}>
         
-        <header className="bg-[#5a55d2] text-white py-3 px-4 rounded-b-3xl shadow-lg z-10 relative shrink-0">
+        <header className="bg-[#5a55d2] text-white py-3 px-4 rounded-b-3xl shadow-lg z-50 relative shrink-0">
           <div className="flex justify-between items-center">
             <h1 className="text-lg font-bold flex items-center gap-1">إدارة عيادة الأسنان 🦷</h1>
-            <button onClick={() => setIsDarkMode(!isDarkMode)} className="bg-white/20 dark:bg-gray-800/20 p-1.5 rounded-xl backdrop-blur-sm hover:bg-white/30 dark:hover:bg-gray-800/30 transition-colors">
-              {isDarkMode ? <Sun size={20} className="text-white" /> : <Moon size={20} className="text-white" />}
-            </button>
+            <div className="relative">
+              <button onClick={() => setShowAppSettings(!showAppSettings)} className="bg-white/20 dark:bg-gray-800/20 p-1.5 rounded-xl backdrop-blur-sm hover:bg-white/30 dark:hover:bg-gray-800/30 transition-colors">
+                <MoreVertical size={20} className="text-white" />
+              </button>
+              {showAppSettings && (
+                <>
+                  <div className="fixed inset-0 z-[105]" onClick={() => setShowAppSettings(false)}></div>
+                  <div className="absolute left-0 top-10 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1.5 z-[110] flex flex-col gap-0.5 animate-fade-in text-gray-800 dark:text-gray-200">
+                    <button onClick={() => {setIsDarkMode(!isDarkMode); setShowAppSettings(false);}} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                      {isDarkMode ? <Sun size={14} className="text-amber-400"/> : <Moon size={14} className="text-indigo-500" />}
+                      {isDarkMode ? 'الوضع المضيء' : 'الوضع المظلم'}
+                    </button>
+                    <div className="h-px bg-gray-100 dark:bg-gray-700 my-0.5"></div>
+                    <button onClick={handleExportData} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                      <Download size={14} className="text-emerald-500" /> تصدير البيانات
+                    </button>
+                    <button onClick={() => { fileInputRef.current?.click(); setShowAppSettings(false); }} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                      <Upload size={14} className="text-blue-500" /> استيراد البيانات
+                    </button>
+                  </div>
+                </>
+              )}
+              <input 
+                type="file" 
+                accept=".json" 
+                className="hidden" 
+                ref={fileInputRef} 
+                onChange={handleImportData} 
+              />
+            </div>
           </div>
         </header>
 
@@ -2112,7 +2220,11 @@ export default function App() {
                   {dialog.type === 'confirm' ? 'إلغاء' : 'حسناً فهمت'}
                 </button>
                 {dialog.type === 'confirm' && dialog.onConfirm && (
-                  <button onClick={() => { if(dialog.onConfirm) dialog.onConfirm(); setDialog({ ...dialog, visible: false, message: '', type: 'alert', onConfirm: null }); }} className="px-5 py-2.5 bg-red-500 text-white rounded-xl text-xs font-bold hover:bg-red-600 transition-colors">
+                  <button onClick={() => { 
+                    const cb = dialog.onConfirm;
+                    setDialog({ visible: false, message: '', type: 'alert', onConfirm: null }); 
+                    if(cb) setTimeout(cb, 0);
+                  }} className="px-5 py-2.5 bg-red-500 text-white rounded-xl text-xs font-bold hover:bg-red-600 transition-colors">
                     نعم، تأكيد
                   </button>
                 )}
