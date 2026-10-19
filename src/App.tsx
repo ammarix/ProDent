@@ -6,19 +6,36 @@ import {
   Stethoscope, History, Edit2, FileText, FlaskConical,
   BarChart2, MoreHorizontal, Gift, Receipt, Undo, Star, MoreVertical, Download, Upload,
   Moon, Sun, Wallet, Activity, CheckCircle2, Clock, XCircle, ArrowRightLeft, Filter, PieChart, ShoppingCart,
-  Loader2
+  Loader2, StickyNote, AlertTriangle, Copy, GitMerge, CheckCheck
 } from 'lucide-react';
 import { saveBackupFile } from './services/storageHelper';
 import { idbGet, idbSet } from './services/dbStorage';
 
-// --- دوال مساعدة ---
-const generateId = () => Math.random().toString(36).substring(2, 9);
+// --- دوال مساعدة ومعرفات فريدة ---
+const generateId = (prefix = 'pt') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
 
 const getFormattedDate = (dateObj = new Date()) => {
   return dateObj.toLocaleDateString('ar-EG', { month: 'long', day: 'numeric' });
 };
 const getCurrentDate = () => getFormattedDate();
 const getCurrentTime = () => new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+
+const formatIsoDate = (isoStr?: string) => {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return isoStr;
+    return d.toLocaleString('ar-EG', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (e) {
+    return isoStr;
+  }
+};
 
 const formatCurrency = (num: any) => {
   if (!num && num !== 0) return '0';
@@ -71,7 +88,10 @@ interface Expense {
 }
 
 interface Patient {
-  id: string;
+  id: string; // يبدأ بـ # مثل #1, #2, #3
+  fileNumber?: number; // الرقم العددي للملف (1, 2, 3...)
+  fileOpenedDate: string; // تاريخ فتح الملف القياسي (YYYY-MM-DD) لأغراض التصنيف والأرشفة واستعلامات الفترات الزمنية
+  fileOpenedAt?: string; // التوقيت الدقيق الكامل بصيغة ISO
   name: string;
   cost: number;
   paid: number;
@@ -110,6 +130,333 @@ interface PatientCardProps {
   onMoveUp: (idx: number) => void;
   onMoveDown: (idx: number) => void;
 }
+
+interface BackupData {
+  version?: string;
+  exportDate?: string;
+  note?: string;
+  patients: Patient[];
+  withdrawals?: Withdrawal[];
+  expenses?: Expense[];
+}
+
+interface PendingImport {
+  raw: BackupData;
+  fileName: string;
+  note?: string;
+  exportDate?: string;
+  patientsCount: number;
+  withdrawalsCount: number;
+  expensesCount: number;
+  currentPatientsCount: number;
+  matchingPatientsCount: number;
+  newPatientsCount: number;
+  totalPatientsAfterMerge: number;
+  newWithdrawalsCount: number;
+  newExpensesCount: number;
+  sanitizedImportedPatients: Patient[];
+  sanitizedImportedWithdrawals: Withdrawal[];
+  sanitizedImportedExpenses: Expense[];
+}
+
+// استخراج الرقم العددي الصافي من معرّف أو رقم ملف المريض
+const extractFileNumber = (val: any): number | null => {
+  if (typeof val === 'number' && !isNaN(val) && val > 0) return Math.floor(val);
+  if (typeof val === 'string') {
+    const clean = val.trim();
+    const match = clean.match(/^#?(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > 0) return num;
+    }
+  }
+  return null;
+};
+
+// حساب الرقم التالي لملف المريض بدءاً من 1 صعوداً مع منع أي تكرار نهائياً
+const getNextPatientFileNumber = (existingPatients: Patient[]): number => {
+  const usedNumbers = new Set<number>();
+  for (const p of existingPatients) {
+    const num = extractFileNumber(p.id) ?? (typeof p.fileNumber === 'number' ? p.fileNumber : null);
+    if (num && num > 0) {
+      usedNumbers.add(num);
+    }
+  }
+  let next = 1;
+  while (usedNumbers.has(next)) {
+    next++;
+  }
+  return next;
+};
+
+// دالة لضمان توفر معرّف رقمي # وتاريخ فتح ملف سليم لكل مريض
+const ensurePatientId = (p: any, fallbackNum?: number): Patient => {
+  const num = extractFileNumber(p?.id) ?? extractFileNumber(p?.fileNumber) ?? fallbackNum ?? 1;
+  const id = `#${num}`;
+
+  const ts = typeof p?.timestamp === 'number' && !isNaN(p.timestamp) ? p.timestamp : Date.now();
+  const isoDateStr = new Date(ts).toISOString();
+  const fileOpenedDate = p?.fileOpenedDate && /^\d{4}-\d{2}-\d{2}/.test(p.fileOpenedDate)
+    ? p.fileOpenedDate.slice(0, 10)
+    : isoDateStr.split('T')[0];
+  const fileOpenedAt = p?.fileOpenedAt || isoDateStr;
+
+  const safeVisits: Visit[] = Array.isArray(p?.visits) ? p.visits.map((v: any) => ({
+    ...v,
+    id: (v && typeof v.id === 'string' && v.id.trim() !== '') ? v.id.trim() : generateId('vs')
+  })) : [];
+
+  const cost = typeof p?.cost === 'number' ? p.cost : (parseFloat(p?.cost as any) || 0);
+  const paid = typeof p?.paid === 'number' ? p.paid : (parseFloat(p?.paid as any) || 0);
+  const remaining = typeof p?.remaining === 'number' ? p.remaining : (cost - paid);
+
+  return {
+    ...p,
+    id,
+    fileNumber: num,
+    fileOpenedDate,
+    fileOpenedAt,
+    name: p?.name || '',
+    cost,
+    paid,
+    remaining,
+    date: p?.date || getCurrentDate(),
+    time: p?.time || getCurrentTime(),
+    timestamp: ts,
+    notes: p?.notes || '',
+    nextAppointmentDate: p?.nextAppointmentDate || '',
+    nextAppointmentTime: p?.nextAppointmentTime || '',
+    age: p?.age || '',
+    dateOfBirth: p?.dateOfBirth || '',
+    phone: p?.phone || '',
+    gender: p?.gender || '',
+    complaint: p?.complaint || '',
+    diagnosis: p?.diagnosis || '',
+    transferDoctor: p?.transferDoctor || '',
+    transferReason: p?.transferReason || '',
+    cancelReason: p?.cancelReason || '',
+    postponeReason: p?.postponeReason || '',
+    postponeDate: p?.postponeDate || '',
+    prognosisRating: p?.prognosisRating,
+    patientSatisfaction: p?.patientSatisfaction,
+    doneNotes: p?.doneNotes || '',
+    status: p?.status || 'ongoing',
+    visits: safeVisits
+  };
+};
+
+// تهيئة وترقيم جميع المرضى بالتسلسل بدءاً من 1 صعوداً بدون أي تكرار
+const sanitizePatientsList = (list: any[]): Patient[] => {
+  if (!Array.isArray(list)) return [];
+
+  // فرز تصاعدي حسب تاريخ الإنشاء لترتيب أرقام الملفات بدقة تاريخية
+  const sorted = [...list].sort((a, b) => (a?.timestamp || 0) - (b?.timestamp || 0));
+  const usedNumbers = new Set<number>();
+
+  // حجز الأرقام الصريحة المحددة مسبقاً
+  for (const item of sorted) {
+    const num = extractFileNumber(item?.id) ?? extractFileNumber(item?.fileNumber);
+    if (num && num > 0 && !usedNumbers.has(num)) {
+      usedNumbers.add(num);
+    }
+  }
+
+  let nextAvail = 1;
+  const result: Patient[] = [];
+
+  for (const item of sorted) {
+    let num = extractFileNumber(item?.id) ?? extractFileNumber(item?.fileNumber);
+    if (!num || num <= 0 || result.some(r => r.fileNumber === num)) {
+      while (usedNumbers.has(nextAvail)) {
+        nextAvail++;
+      }
+      num = nextAvail;
+      usedNumbers.add(num);
+    }
+
+    result.push(ensurePatientId(item, num));
+  }
+
+  // إعادة الترتيب بحسب الأحدث نزولاً
+  return result.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+};
+
+// دالة البحث عن مريض مطابق بين المستورد والحالي
+const findMatchingPatient = (imported: Patient, currentList: Patient[]): Patient | undefined => {
+  // 1. برقم الملف أو المعرف إذا تطابق رقمهما
+  const impFileNum = extractFileNumber(imported.id) ?? imported.fileNumber;
+  if (impFileNum) {
+    const byId = currentList.find(c => {
+      const curNum = extractFileNumber(c.id) ?? c.fileNumber;
+      return curNum === impFileNum;
+    });
+    if (byId) return byId;
+  }
+  // 2. برقم الهاتف إن وجد وصحيح
+  const impPhone = imported.phone?.trim();
+  if (impPhone && impPhone.length >= 6) {
+    const byPhone = currentList.find(c => c.phone?.trim() && c.phone.trim() === impPhone);
+    if (byPhone) return byPhone;
+  }
+  // 3. بالاسم بالكامل (مع إزالة الفراغات الزائدة وتوحيد الأحرف)
+  const impName = imported.name?.trim().toLowerCase();
+  if (impName) {
+    const byName = currentList.find(c => c.name?.trim().toLowerCase() === impName);
+    if (byName) return byName;
+  }
+  return undefined;
+};
+
+// خوارزمية الدمج الذكي لسجلات المريض لمنع التعارض وفقدان البيانات
+const mergePatientRecords = (current: Patient, imported: Patient): Patient => {
+  const currentTs = current.timestamp || 0;
+  const importedTs = imported.timestamp || 0;
+  const isImportedNewer = importedTs > currentTs;
+  const primary = isImportedNewer ? imported : current;
+  const secondary = isImportedNewer ? current : imported;
+
+  // 1. دمج الجلسات بدقة ومنع تكرار أي جلسة مسجلة مسبقاً
+  const mergedVisits: Visit[] = [...current.visits];
+  for (const impVisit of imported.visits) {
+    const exists = mergedVisits.some(curV => {
+      if (curV.id && impVisit.id && curV.id === impVisit.id) return true;
+      return (
+        curV.date === impVisit.date &&
+        (curV.procedure || '').trim() === (impVisit.procedure || '').trim() &&
+        Number(curV.cost) === Number(impVisit.cost) &&
+        Number(curV.paid) === Number(impVisit.paid)
+      );
+    });
+
+    if (!exists) {
+      mergedVisits.push({
+        ...impVisit,
+        id: impVisit.id || generateId('vs')
+      });
+    } else {
+      const idx = mergedVisits.findIndex(curV => 
+        (curV.id && impVisit.id && curV.id === impVisit.id) ||
+        (curV.date === impVisit.date && (curV.procedure || '').trim() === (impVisit.procedure || '').trim() && Number(curV.cost) === Number(impVisit.cost) && Number(curV.paid) === Number(impVisit.paid))
+      );
+      if (idx !== -1) {
+        const curV = mergedVisits[idx];
+        mergedVisits[idx] = {
+          ...curV,
+          notes: curV.notes?.trim() ? curV.notes : (impVisit.notes || ''),
+          splits: (curV.splits && curV.splits.length > 0) ? curV.splits : impVisit.splits,
+          snapshot: curV.snapshot || impVisit.snapshot
+        };
+      }
+    }
+  }
+
+  // احتساب الأرصدة بدقة من الجلسات المدمجة
+  let finalCost = 0;
+  let finalPaid = 0;
+  if (mergedVisits.length > 0) {
+    finalCost = mergedVisits.reduce((sum, v) => sum + (Number(v.cost) || 0), 0);
+    finalPaid = mergedVisits.reduce((sum, v) => sum + (Number(v.paid) || 0), 0);
+  } else {
+    finalCost = Math.max(Number(current.cost) || 0, Number(imported.cost) || 0);
+    finalPaid = Math.max(Number(current.paid) || 0, Number(imported.paid) || 0);
+  }
+  const finalRemaining = finalCost - finalPaid;
+
+  // دمج الملاحظات بأمان دون حذف أي ملاحظة سابقة
+  let mergedNotes = (current.notes || '').trim();
+  const impNotes = (imported.notes || '').trim();
+  if (impNotes) {
+    if (!mergedNotes) {
+      mergedNotes = impNotes;
+    } else if (!mergedNotes.includes(impNotes) && !impNotes.includes(mergedNotes)) {
+      mergedNotes = `${mergedNotes}\n---\n[ملاحظة من النسخة]: ${impNotes}`;
+    }
+  }
+
+  // تحديد تاريخ فتح الملف المحفوظ (نأخذ التاريخ الأقدم لضمان دقة الأرشفة التاريخية)
+  let finalFileOpenedDate = current.fileOpenedDate || imported.fileOpenedDate || '';
+  if (current.fileOpenedDate && imported.fileOpenedDate) {
+    finalFileOpenedDate = current.fileOpenedDate < imported.fileOpenedDate ? current.fileOpenedDate : imported.fileOpenedDate;
+  }
+  let finalFileOpenedAt = current.fileOpenedAt || imported.fileOpenedAt || '';
+  if (current.fileOpenedAt && imported.fileOpenedAt) {
+    finalFileOpenedAt = current.fileOpenedAt < imported.fileOpenedAt ? current.fileOpenedAt : imported.fileOpenedAt;
+  }
+
+  const fileNum = current.fileNumber || extractFileNumber(current.id) || imported.fileNumber || extractFileNumber(imported.id) || 1;
+  const finalId = `#${fileNum}`;
+
+  return {
+    id: finalId,
+    fileNumber: fileNum,
+    fileOpenedDate: finalFileOpenedDate || new Date(Math.min(currentTs || Date.now(), importedTs || Date.now())).toISOString().split('T')[0],
+    fileOpenedAt: finalFileOpenedAt || new Date(Math.min(currentTs || Date.now(), importedTs || Date.now())).toISOString(),
+    name: current.name || imported.name,
+    cost: finalCost,
+    paid: finalPaid,
+    remaining: finalRemaining,
+    date: current.date || imported.date || getCurrentDate(),
+    time: current.time || imported.time || getCurrentTime(),
+    timestamp: Math.min(currentTs || Date.now(), importedTs || Date.now()), // حفظ أقدم توقيت لفتح الملف
+    notes: mergedNotes,
+    nextAppointmentDate: primary.nextAppointmentDate || secondary.nextAppointmentDate || '',
+    nextAppointmentTime: primary.nextAppointmentTime || secondary.nextAppointmentTime || '',
+    age: primary.age || secondary.age || '',
+    dateOfBirth: primary.dateOfBirth || secondary.dateOfBirth || '',
+    phone: primary.phone || secondary.phone || '',
+    gender: primary.gender || secondary.gender || '',
+    complaint: primary.complaint || secondary.complaint || '',
+    diagnosis: primary.diagnosis || secondary.diagnosis || '',
+    transferDoctor: primary.transferDoctor || secondary.transferDoctor || '',
+    transferReason: primary.transferReason || secondary.transferReason || '',
+    cancelReason: primary.cancelReason || secondary.cancelReason || '',
+    postponeReason: primary.postponeReason || secondary.postponeReason || '',
+    postponeDate: primary.postponeDate || secondary.postponeDate || '',
+    prognosisRating: primary.prognosisRating ?? secondary.prognosisRating,
+    patientSatisfaction: primary.patientSatisfaction ?? secondary.patientSatisfaction,
+    doneNotes: primary.doneNotes || secondary.doneNotes || '',
+    status: primary.status || secondary.status || 'ongoing',
+    visits: mergedVisits
+  };
+};
+
+const mergeWithdrawalsList = (current: Withdrawal[], imported: Withdrawal[]): { merged: Withdrawal[]; newAdded: number } => {
+  const result = [...current];
+  let newAdded = 0;
+  for (const imp of imported) {
+    const exists = result.some(cur => 
+      (cur.id && imp.id && cur.id === imp.id) ||
+      (cur.date === imp.date && cur.time === imp.time && Number(cur.amount) === Number(imp.amount) && (cur.note || '').trim() === (imp.note || '').trim())
+    );
+    if (!exists) {
+      result.push({
+        ...imp,
+        id: imp.id || generateId('wd')
+      });
+      newAdded++;
+    }
+  }
+  return { merged: result, newAdded };
+};
+
+const mergeExpensesList = (current: Expense[], imported: Expense[]): { merged: Expense[]; newAdded: number } => {
+  const result = [...current];
+  let newAdded = 0;
+  for (const imp of imported) {
+    const exists = result.some(cur => 
+      (cur.id && imp.id && cur.id === imp.id) ||
+      (cur.date === imp.date && cur.time === imp.time && Number(cur.amount) === Number(imp.amount) && (cur.note || '').trim() === (imp.note || '').trim())
+    );
+    if (!exists) {
+      result.push({
+        ...imp,
+        id: imp.id || generateId('ex')
+      });
+      newAdded++;
+    }
+  }
+  return { merged: result, newAdded };
+};
 
 // ==========================================
 // 1. مكون بطاقة المريض
@@ -181,18 +528,26 @@ export default function App() {
       const saved = localStorage.getItem('@patients_pro_data_v3');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return sanitizePatientsList(parsed);
       }
       const fallback = localStorage.getItem('@patients_pro_data_v2') || localStorage.getItem('@patients_pro_data');
       if (fallback) {
         const parsed = JSON.parse(fallback);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return sanitizePatientsList(parsed);
       }
     } catch (e) {
       console.error('Error initializing patients from storage', e);
     }
     return [];
   });
+  const [copiedId, setCopiedId] = useState(false);
+  const handleCopyPatientId = (id: string) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
+  };
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
   const [paid, setPaid] = useState('');
@@ -251,6 +606,10 @@ export default function App() {
   const [showReports, setShowReports] = useState(false);
   const [showAppSettings, setShowAppSettings] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportNote, setExportNote] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showWithdrawals, setShowWithdrawals] = useState(false);
   const [highlightEditBtn, setHighlightEditBtn] = useState(false);
@@ -375,8 +734,9 @@ export default function App() {
         if (patients.length === 0) {
           const idbPatients = await idbGet<Patient[]>('@patients_pro_data_v3');
           if (idbPatients && Array.isArray(idbPatients) && idbPatients.length > 0) {
-            setPatients(idbPatients);
-            localStorage.setItem('@patients_pro_data_v3', JSON.stringify(idbPatients));
+            const sanitized = sanitizePatientsList(idbPatients);
+            setPatients(sanitized);
+            localStorage.setItem('@patients_pro_data_v3', JSON.stringify(sanitized));
           }
         }
         if (withdrawals.length === 0) {
@@ -429,7 +789,7 @@ export default function App() {
     try {
       localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(withdrawals));
       idbSet('@patients_withdrawals_v1', withdrawals);
-    } catch(e) {}
+    } catch (e) {}
   }, [withdrawals]);
 
   const isInitialExpensesMount = useRef(true);
@@ -455,11 +815,13 @@ export default function App() {
       const datePart = dateObj.toISOString().split('T')[0];
       const timePart = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `ProDent_${datePart}_${timePart}.json`;
+      const trimmedNote = exportNote.trim();
 
-      const dataToExport = {
-        version: '1.2',
+      const dataToExport: BackupData = {
+        version: '1.4',
         exportDate: new Date().toISOString(),
-        patients,
+        note: trimmedNote,
+        patients: patients.map(ensurePatientId),
         withdrawals,
         expenses
       };
@@ -469,12 +831,13 @@ export default function App() {
       // تنفيـذ الحفظ الفعلي وانتظار اكتمال الكتابة بنجاح
       const result = await saveBackupFile(filename, jsonString);
 
-      // لا يتم إغلاق القائمة وعرض الإشعار إلا بعد التأكد التام من نجاح الكتابة
+      // إغلاق نافذة التصدير وتفريغ الملاحظة
+      setShowExportModal(false);
+      setExportNote('');
       setShowAppSettings(false);
-      showAlert(`تم حفظ النسخة الاحتياطية بنجاح!\n📄 الملف: ${filename}\n📁 الوجهة: ${result.destination}`);
+      showAlert(`تم حفظ النسخة الاحتياطية بنجاح!\n📄 الملف: ${filename}\n📁 الوجهة: ${result.destination}${trimmedNote ? `\n📝 الملاحظة: ${trimmedNote}` : ''}`);
     } catch (error: any) {
       console.error('Export error:', error);
-      setShowAppSettings(false);
       if (error?.message?.includes('إلغاء') || error?.name === 'AbortError') {
         showAlert('تم إلغاء عملية حفظ النسخة الاحتياطية.');
       } else {
@@ -494,28 +857,215 @@ export default function App() {
       try {
         const importedData = JSON.parse(e.target?.result as string);
         if (importedData && importedData.patients && Array.isArray(importedData.patients)) {
-          showConfirm('هل أنت متأكد من استيراد هذه النسخة الاحتياطية؟ سيتم استبدال جميع البيانات الحالية.', () => {
-            // Restore backwards-compatible structure mapping
-            setPatients(importedData.patients || []);
-            setWithdrawals(importedData.withdrawals || []);
-            setExpenses(importedData.expenses || []);
-            
-            showAlert('تم استيراد البيانات واسترجاع النسخة الاحتياطية بنجاح!');
-            
-            // Allow resetting file input after successful import
-            if (fileInputRef.current) fileInputRef.current.value = '';
+          const sanitizedPatients = sanitizePatientsList(importedData.patients);
+          const sanitizedWithdrawals: Withdrawal[] = Array.isArray(importedData.withdrawals)
+            ? importedData.withdrawals.map((w: any) => ({ ...w, id: w.id || generateId('wd') }))
+            : [];
+          const sanitizedExpenses: Expense[] = Array.isArray(importedData.expenses)
+            ? importedData.expenses.map((ex: any) => ({ ...ex, id: ex.id || generateId('ex') }))
+            : [];
+
+          // تحليل المقارنة والمطابقة مع البيانات الحالية
+          let matchingCount = 0;
+          let newCount = 0;
+          sanitizedPatients.forEach(impP => {
+            const match = findMatchingPatient(impP, patients);
+            if (match) {
+              matchingCount++;
+            } else {
+              newCount++;
+            }
           });
+
+          const { newAdded: newWithdrawalsCount } = mergeWithdrawalsList(withdrawals, sanitizedWithdrawals);
+          const { newAdded: newExpensesCount } = mergeExpensesList(expenses, sanitizedExpenses);
+
+          setPendingImport({
+            raw: importedData,
+            fileName: file.name,
+            note: typeof importedData.note === 'string' && importedData.note.trim() ? importedData.note.trim() : undefined,
+            exportDate: importedData.exportDate,
+            patientsCount: sanitizedPatients.length,
+            withdrawalsCount: sanitizedWithdrawals.length,
+            expensesCount: sanitizedExpenses.length,
+            currentPatientsCount: patients.length,
+            matchingPatientsCount: matchingCount,
+            newPatientsCount: newCount,
+            totalPatientsAfterMerge: patients.length + newCount,
+            newWithdrawalsCount,
+            newExpensesCount,
+            sanitizedImportedPatients: sanitizedPatients,
+            sanitizedImportedWithdrawals: sanitizedWithdrawals,
+            sanitizedImportedExpenses: sanitizedExpenses,
+          });
+          setShowImportModal(true);
         } else {
           showAlert('ملف النسخة الاحتياطية غير صالح أو غير مدعوم.');
           if (fileInputRef.current) fileInputRef.current.value = '';
         }
       } catch (error) {
-        showAlert('يوجد خطأ في محتوى الملف.');
+        showAlert('يوجد خطأ في قراءة محتوى الملف.');
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
       setShowAppSettings(false);
     };
     reader.readAsText(file);
+  };
+
+  // تنفيذ الدمج الذكي للبيانات
+  const handleExecuteMerge = () => {
+    if (!pendingImport) return;
+    try {
+      const currentList = [...patients];
+      const incomingList = pendingImport.sanitizedImportedPatients;
+      const matchedImportedIds = new Set<string>();
+
+      // 1. تحديث ودمج المرضى الحاليين الذين تم العثور على مطابقة لهم في الملف
+      const updatedExisting = currentList.map(curP => {
+        const matchingImp = findMatchingPatient(curP, incomingList);
+        if (matchingImp) {
+          matchedImportedIds.add(matchingImp.id);
+          return mergePatientRecords(curP, matchingImp);
+        }
+        return curP;
+      });
+
+      // 2. إضافة المرضى الجدد من الملف مع تخصيص أرقام ملفات فريدة غير مكررة
+      const brandNewPatients: Patient[] = [];
+      const usedNumbers = new Set<number>();
+      for (const p of updatedExisting) {
+        const num = extractFileNumber(p.id) ?? p.fileNumber;
+        if (num && num > 0) usedNumbers.add(num);
+      }
+
+      let nextAvail = 1;
+      const getNextAvail = () => {
+        while (usedNumbers.has(nextAvail)) {
+          nextAvail++;
+        }
+        usedNumbers.add(nextAvail);
+        return nextAvail;
+      };
+
+      for (const impP of incomingList) {
+        if (!matchedImportedIds.has(impP.id)) {
+          const match = findMatchingPatient(impP, currentList);
+          if (!match) {
+            let num = extractFileNumber(impP.id) ?? impP.fileNumber;
+            if (!num || usedNumbers.has(num)) {
+              num = getNextAvail();
+            } else {
+              usedNumbers.add(num);
+            }
+            brandNewPatients.push(ensurePatientId(impP, num));
+          }
+        }
+      }
+
+      const mergedPatients = [...updatedExisting, ...brandNewPatients];
+      const mergedW = mergeWithdrawalsList(withdrawals, pendingImport.sanitizedImportedWithdrawals);
+      const mergedE = mergeExpensesList(expenses, pendingImport.sanitizedImportedExpenses);
+
+      setPatients(mergedPatients);
+      setWithdrawals(mergedW.merged);
+      setExpenses(mergedE.merged);
+
+      localStorage.setItem('@patients_pro_data_v3', JSON.stringify(mergedPatients));
+      localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(mergedW.merged));
+      localStorage.setItem('@patients_expenses_v1', JSON.stringify(mergedE.merged));
+      idbSet('@patients_pro_data_v3', mergedPatients);
+      idbSet('@patients_withdrawals_v1', mergedW.merged);
+      idbSet('@patients_expenses_v1', mergedE.merged);
+
+      const matchCount = pendingImport.matchingPatientsCount;
+      const newCount = brandNewPatients.length;
+      const totalCount = mergedPatients.length;
+
+      setShowImportModal(false);
+      setPendingImport(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      let msg = `✅ تم دمج البيانات بنجاح!\n` +
+        `• تم دمج وتحديث: ${matchCount} مريض موجود مسبقاً\n` +
+        `• تم إضافة: ${newCount} مريض جديد\n` +
+        `• إجمالي المرضى الآن: ${totalCount} مريض`;
+      if (mergedW.newAdded > 0) msg += `\n• سحبيات مضافة: ${mergedW.newAdded}`;
+      if (mergedE.newAdded > 0) msg += `\n• مصروفات مضافة: ${mergedE.newAdded}`;
+      
+      showAlert(msg);
+    } catch (err) {
+      console.error('Merge error:', err);
+      showAlert('حدث خطأ أثناء دمج البيانات.');
+    }
+  };
+
+  // تنفيذ استبدال البيانات بالكامل
+  const handleExecuteReplace = () => {
+    if (!pendingImport) return;
+    showConfirm(
+      `⚠️ تحذير شديد:\nهل أنت متأكد من استبدال كافة البيانات الحالية؟\n\nسيتم مسح بيانات (${patients.length}) مريض حالي، واعتماد بيانات النسخة الاحتياطية (${pendingImport.patientsCount} مريض) بالكامل.\nهذا الإجراء لا يمكن التراجع عنه.`,
+      () => {
+        try {
+          const restoredPatients = pendingImport.sanitizedImportedPatients;
+          const restoredWithdrawals = pendingImport.sanitizedImportedWithdrawals;
+          const restoredExpenses = pendingImport.sanitizedImportedExpenses;
+
+          setPatients(restoredPatients);
+          setWithdrawals(restoredWithdrawals);
+          setExpenses(restoredExpenses);
+
+          localStorage.setItem('@patients_pro_data_v3', JSON.stringify(restoredPatients));
+          localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(restoredWithdrawals));
+          localStorage.setItem('@patients_expenses_v1', JSON.stringify(restoredExpenses));
+          idbSet('@patients_pro_data_v3', restoredPatients);
+          idbSet('@patients_withdrawals_v1', restoredWithdrawals);
+          idbSet('@patients_expenses_v1', restoredExpenses);
+
+          setShowImportModal(false);
+          setPendingImport(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          showAlert(`تم استبدال البيانات بالكامل بنجاح!\nعدد المرضى المسترجع: ${restoredPatients.length} مريض`);
+        } catch (err) {
+          console.error('Replace error:', err);
+          showAlert('حدث خطأ أثناء استبدال البيانات.');
+        }
+      }
+    );
+  };
+
+  // استيراد مباشر في حالة التطبيق لا يحتوي على بيانات سابقة
+  const handleExecuteCleanImport = () => {
+    if (!pendingImport) return;
+    try {
+      const restoredPatients = pendingImport.sanitizedImportedPatients;
+      const restoredWithdrawals = pendingImport.sanitizedImportedWithdrawals;
+      const restoredExpenses = pendingImport.sanitizedImportedExpenses;
+
+      setPatients(restoredPatients);
+      setWithdrawals(restoredWithdrawals);
+      setExpenses(restoredExpenses);
+
+      localStorage.setItem('@patients_pro_data_v3', JSON.stringify(restoredPatients));
+      localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(restoredWithdrawals));
+      localStorage.setItem('@patients_expenses_v1', JSON.stringify(restoredExpenses));
+      idbSet('@patients_pro_data_v3', restoredPatients);
+      idbSet('@patients_withdrawals_v1', restoredWithdrawals);
+      idbSet('@patients_expenses_v1', restoredExpenses);
+
+      setShowImportModal(false);
+      setPendingImport(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      showAlert(`تم استيراد البيانات بنجاح!\nعدد المرضى: ${restoredPatients.length} مريض`);
+    } catch (err) {
+      console.error('Clean import error:', err);
+      showAlert('حدث خطأ أثناء استيراد البيانات.');
+    }
+  };
+
+  const handleCancelImport = () => {
+    setShowImportModal(false);
+    setPendingImport(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleAddPatient = () => {
@@ -526,8 +1076,17 @@ export default function App() {
     const parsedCost = parseFloat(cost) || 0;
     const parsedPaid = paid === '' ? 0 : parseFloat(paid);
     
+    const nextFileNum = getNextPatientFileNumber(patients);
+    const newId = `#${nextFileNum}`;
+    const now = new Date();
+    const fileOpenedDate = now.toISOString().split('T')[0];
+    const fileOpenedAt = now.toISOString();
+    
     const newPatient: Patient = {
-      id: generateId(),
+      id: newId,
+      fileNumber: nextFileNum,
+      fileOpenedDate,
+      fileOpenedAt,
       name,
       cost: parsedCost,
       paid: parsedPaid,
@@ -545,7 +1104,7 @@ export default function App() {
       complaint: newPatientComplaint,
       diagnosis: newPatientDiagnosis,
       visits: (parsedCost > 0 || parsedPaid > 0 || newPatientNotes.trim()) ? [{
-        id: generateId(),
+        id: generateId('vs'),
         date: getCurrentDate(),
         procedure: newPatientNotes.trim() ? newPatientNotes.trim() : 'دفعة أولى / فتح ملف',
         cost: parsedCost,
@@ -960,7 +1519,16 @@ export default function App() {
   };
   const availableMonths = [...new Set(patients.map(p => getMonthKey(p.timestamp)))];
 
-  let displayPatients = patients.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  let displayPatients = patients.filter(p => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const cleanNumQuery = q.replace(/^#/, '');
+    const matchName = (p.name || '').toLowerCase().includes(q);
+    const matchId = (p.id || '').toLowerCase().includes(q) || (p.fileNumber !== undefined && p.fileNumber.toString() === cleanNumQuery);
+    const matchPhone = (p.phone || '').includes(q);
+    const matchDate = (p.fileOpenedDate || '').includes(q) || (p.date || '').includes(q);
+    return matchName || matchId || matchPhone || matchDate;
+  });
   if (selectedMonth !== 'all') displayPatients = displayPatients.filter(p => getMonthKey(p.timestamp) === selectedMonth);
   if (statusFilter !== 'all') {
     if (statusFilter === 'none') {
@@ -1227,12 +1795,14 @@ export default function App() {
                     </button>
                     <div className="h-px bg-gray-100 dark:bg-gray-700 my-0.5"></div>
                     <button 
-                      onClick={handleExportData} 
-                      disabled={isExporting}
-                      className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 font-medium"
+                      onClick={() => {
+                        setShowAppSettings(false);
+                        setShowExportModal(true);
+                      }} 
+                      className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
                     >
-                      {isExporting ? <Loader2 size={14} className="animate-spin text-emerald-500" /> : <Download size={14} className="text-emerald-500" />}
-                      <span>{isExporting ? 'جاري التصدير...' : 'تصدير البيانات'}</span>
+                      <Download size={14} className="text-emerald-500" />
+                      <span>تصدير البيانات</span>
                     </button>
                     <button onClick={() => { fileInputRef.current?.click(); setShowAppSettings(false); }} className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium">
                       <Upload size={14} className="text-blue-500" /> استيراد البيانات
@@ -1703,27 +2273,59 @@ export default function App() {
           <div className="absolute inset-0 z-[100] bg-black/40 flex justify-center items-end sm:items-center sm:p-4 backdrop-blur-sm lg:static lg:bg-transparent lg:backdrop-blur-none lg:p-0 lg:flex-1 lg:h-full lg:z-0 lg:pointer-events-auto" onClick={() => { setSelectedPatient(null); setIsEditingPatientDetails(false); }}>
             <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[92vh] lg:max-w-none lg:rounded-none lg:shadow-none lg:h-full lg:max-h-none border-r border-gray-100 dark:border-gray-750/30" onClick={e => e.stopPropagation()}>
               
-              <div className="flex justify-between items-center p-4 border-b">
-                <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 leading-normal flex items-center gap-2 flex-1 pl-4 pt-1">
-                  <User size={20} className="text-[#5a55d2] shrink-0" /> 
-                  {isEditingName ? (
-                    <div className="flex items-center gap-1 w-full">
-                      <input 
-                        type="text" 
-                        value={selectedPatient.name} 
-                        onChange={(e) => setSelectedPatient({...selectedPatient, name: e.target.value})}
-                        className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm w-full outline-none focus:border-[#5a55d2]"
-                        autoFocus
-                      />
-                      <button onClick={() => { setIsEditingName(false); handleSavePatientDetails(); }} className="p-1.5 bg-green-100 text-green-600 rounded hover:bg-green-200 shrink-0"><Check size={14} /></button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 w-full">
-                      <span className="truncate">{selectedPatient.name || (!selectedPatient.id ? 'إضافة مريض جديد' : 'مريض بدون اسم')}</span>
-                      <button onClick={() => setIsEditingName(true)} className="p-1 text-gray-400 hover:text-[#5a55d2] transition-colors shrink-0"><Edit2 size={14} /></button>
-                    </div>
-                  )}
-                </h2>
+              <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700/60">
+                <div className="flex-1 pl-4 pt-1 min-w-0">
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 leading-normal flex items-center gap-2">
+                    <User size={20} className="text-[#5a55d2] shrink-0" /> 
+                    {isEditingName ? (
+                      <div className="flex items-center gap-1 w-full">
+                        <input 
+                          type="text" 
+                          value={selectedPatient.name} 
+                          onChange={(e) => setSelectedPatient({...selectedPatient, name: e.target.value})}
+                          className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm w-full outline-none focus:border-[#5a55d2]"
+                          autoFocus
+                        />
+                        <button onClick={() => { setIsEditingName(false); handleSavePatientDetails(); }} className="p-1.5 bg-green-100 text-green-600 rounded hover:bg-green-200 shrink-0"><Check size={14} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 w-full">
+                        <span className="truncate">{selectedPatient.name || (!selectedPatient.id ? 'إضافة مريض جديد' : 'مريض بدون اسم')}</span>
+                        <button onClick={() => setIsEditingName(true)} className="p-1 text-gray-400 hover:text-[#5a55d2] transition-colors shrink-0"><Edit2 size={14} /></button>
+                      </div>
+                    )}
+                  </h2>
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                    {selectedPatient.id && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-lg inline-flex items-center gap-1 border border-indigo-200/80 dark:border-indigo-800/80" dir="ltr">
+                          <span className="text-gray-400 dark:text-gray-500 font-sans text-[10px]">رقم الملف:</span>
+                          <span className="font-black text-xs select-all text-[#5a55d2] dark:text-indigo-300">{selectedPatient.id}</span>
+                        </span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleCopyPatientId(selectedPatient.id)} 
+                          title="نسخ رقم الملف"
+                          className="p-1 text-gray-400 hover:text-[#5a55d2] dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors inline-flex items-center gap-1"
+                        >
+                          {copiedId ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                          {copiedId && <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-medium">تم النسخ</span>}
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* تدوين وتوثيق تاريخ فتح الملف */}
+                    {(selectedPatient.fileOpenedDate || selectedPatient.date) && (
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700/60 px-2 py-0.5 rounded-lg inline-flex items-center gap-1 border border-gray-200/60 dark:border-gray-600/60" title="تاريخ فتح ملف المريض للأرشفة والتصنيف">
+                        <Calendar size={11} className="text-[#5a55d2] dark:text-indigo-400" />
+                        <span className="text-gray-400 dark:text-gray-500">فتح الملف:</span>
+                        <span className="font-semibold text-gray-700 dark:text-gray-200" dir="ltr">
+                          {selectedPatient.fileOpenedDate || selectedPatient.date}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
                 <button onClick={() => { setSelectedPatient(null); setIsEditingPatientDetails(false); setIsEditingName(false); }} className="p-2 bg-gray-100 dark:bg-gray-700 rounded-full hover:bg-gray-200 dark:bg-gray-600 dark:hover:bg-gray-600 shrink-0"><X size={18} /></button>
               </div>
 
@@ -2546,6 +3148,307 @@ export default function App() {
                   <div className="text-center text-gray-500 dark:text-gray-400 py-6 text-sm">لا توجد بيانات مرتبطة بهذا القسم</div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* نافذة تصدير نسخة احتياطية مع ملاحظة */}
+        {showExportModal && (
+          <div className="fixed inset-0 z-[180] bg-black/50 backdrop-blur-sm flex justify-center items-center p-4 animate-fade-in" onClick={() => !isExporting && setShowExportModal(false)}>
+            <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-2xl p-5 flex flex-col gap-4 border border-gray-100 dark:border-gray-700 animate-scale-in" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-700/60 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                    <Download size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-gray-800 dark:text-gray-100">تصدير نسخة احتياطية</h2>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">حفظ جميع سجلات المرضى والمالية بأمان</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => !isExporting && setShowExportModal(false)}
+                  disabled={isExporting}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* ملخص البيانات الجاري تصديرها */}
+              <div className="grid grid-cols-3 gap-2 bg-gray-50 dark:bg-gray-750 p-2.5 rounded-xl border border-gray-150 dark:border-gray-700 text-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">المرضى</span>
+                  <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">{patients.length}</span>
+                </div>
+                <div className="flex flex-col border-r border-l border-gray-200 dark:border-gray-600">
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">السحبيات</span>
+                  <span className="text-sm font-black text-teal-600 dark:text-teal-400">{withdrawals.length}</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">المصروفات</span>
+                  <span className="text-sm font-black text-purple-600 dark:text-purple-400">{expenses.length}</span>
+                </div>
+              </div>
+
+              {/* حقل كتابة الملاحظة */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-gray-700 dark:text-gray-200 flex items-center gap-1.5">
+                  <StickyNote size={14} className="text-amber-500" />
+                  <span>ملاحظة أو وصف للنسخة (اختياري):</span>
+                </label>
+                <div className="relative">
+                  <textarea
+                    rows={3}
+                    value={exportNote}
+                    onChange={(e) => setExportNote(e.target.value)}
+                    placeholder="اكتب ملاحظة لتمييز هذه النسخة (مثال: نسخة نهاية الأسبوع، إقفال شهري، قبل الترقية...)"
+                    className="w-full text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 rounded-xl p-3 focus:outline-none focus:border-[#5a55d2] dark:focus:border-indigo-400 dark:text-gray-100 resize-none transition-all"
+                  />
+                </div>
+                
+                {/* مقترحات سريعة للملاحظة */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">اقتراحات:</span>
+                  {['نسخة دورية', 'إقفال شهري', 'قبل التحديث', 'مراجعة حسابات'].map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setExportNote(prev => prev ? `${prev} - ${tag}` : tag)}
+                      className="text-[10px] px-2 py-0.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 transition-colors"
+                    >
+                      +{tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* أزرار الإجراء */}
+              <div className="flex justify-end items-center gap-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                <button
+                  type="button"
+                  onClick={() => setShowExportModal(false)}
+                  disabled={isExporting}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportData}
+                  disabled={isExporting}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm transition-colors disabled:opacity-60"
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      <span>جاري حفظ النسخة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download size={15} />
+                      <span>تصدير وحفظ النسخة</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* نافذة استيراد نسخة احتياطية مع خياري الدمج الذكي أو الاستبدال */}
+        {showImportModal && pendingImport && (
+          <div className="fixed inset-0 z-[180] bg-black/50 backdrop-blur-sm flex justify-center items-center p-4 animate-fade-in" onClick={handleCancelImport}>
+            <div className="bg-white dark:bg-gray-800 w-full max-w-lg rounded-2xl shadow-2xl p-5 flex flex-col gap-4 border border-gray-100 dark:border-gray-700 animate-scale-in max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              
+              {/* الرأس */}
+              <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-700/60 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-[#5a55d2] dark:text-indigo-400 flex items-center justify-center">
+                    <Upload size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-gray-800 dark:text-gray-100">استيراد النسخة الاحتياطية</h2>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">فحص وتحديد آلية الاستيراد (دمج ذكي أو استبدال)</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={handleCancelImport}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* بطاقة معلومات الملف والتاريخ */}
+              <div className="bg-gray-50 dark:bg-gray-750 p-3 rounded-xl border border-gray-150 dark:border-gray-700 flex flex-col gap-1.5 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">اسم الملف:</span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200 truncate max-w-[220px]" dir="ltr">{pendingImport.fileName}</span>
+                </div>
+                {pendingImport.exportDate && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-500 dark:text-gray-400">تاريخ إنشاء النسخة:</span>
+                    <span className="font-semibold text-gray-800 dark:text-gray-200">{formatIsoDate(pendingImport.exportDate)}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* الملاحظة المرفقة مع النسخة الاحتياطية */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700 dark:text-gray-200">
+                  <StickyNote size={15} className="text-amber-500" />
+                  <span>ملاحظة النسخة المرفقة:</span>
+                </div>
+                {pendingImport.note ? (
+                  <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 shadow-sm">
+                    <p className="text-xs text-amber-950 dark:text-amber-200 leading-relaxed whitespace-pre-wrap font-medium">
+                      {pendingImport.note}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-gray-50 dark:bg-gray-800/80 border border-dashed border-gray-200 dark:border-gray-700 rounded-xl p-2.5 text-center">
+                    <span className="text-xs text-gray-400 dark:text-gray-500">لا توجد ملاحظة مرفقة مع هذا الملف</span>
+                  </div>
+                )}
+              </div>
+
+              {/* بطاقة تحليل ومقارنة البيانات بدقة */}
+              {pendingImport.currentPatientsCount > 0 ? (
+                <div className="flex flex-col gap-2 bg-indigo-50/40 dark:bg-indigo-950/20 p-3.5 rounded-2xl border border-indigo-150 dark:border-indigo-900/40">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                      <GitMerge size={15} className="text-[#5a55d2] dark:text-indigo-400" />
+                      تحليل مطابقة البيانات مع التطبيق الحالي
+                    </span>
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                      (الحالي: {pendingImport.currentPatientsCount} | الملف: {pendingImport.patientsCount})
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-1">
+                    <div className="bg-white dark:bg-gray-800 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/30 shadow-xs">
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block mb-0.5">مرضى سيتم دمجهم</span>
+                      <span className="text-sm font-black text-blue-600 dark:text-blue-400">{pendingImport.matchingPatientsCount}</span>
+                      <span className="text-[9px] text-gray-400 dark:text-gray-500 block">تحديث وجلسات</span>
+                    </div>
+
+                    <div className="bg-white dark:bg-gray-800 p-2.5 rounded-xl border border-emerald-100 dark:border-emerald-900/30 shadow-xs">
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block mb-0.5">مرضى جدد للإضافة</span>
+                      <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{pendingImport.newPatientsCount}</span>
+                      <span className="text-[9px] text-gray-400 dark:text-gray-500 block">سجلات جديدة</span>
+                    </div>
+
+                    <div className="bg-white dark:bg-gray-800 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/30 shadow-xs">
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block mb-0.5">الإجمالي بعد الدمج</span>
+                      <span className="text-sm font-black text-[#5a55d2] dark:text-indigo-400">{pendingImport.totalPatientsAfterMerge}</span>
+                      <span className="text-[9px] text-gray-400 dark:text-gray-500 block">مريض كلياً</span>
+                    </div>
+
+                    <div className="bg-white dark:bg-gray-800 p-2.5 rounded-xl border border-purple-100 dark:border-purple-900/30 shadow-xs">
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block mb-0.5">سحبيات ومصروفات</span>
+                      <span className="text-xs font-bold text-purple-600 dark:text-purple-400 block">
+                        +{pendingImport.newWithdrawalsCount} / +{pendingImport.newExpensesCount}
+                      </span>
+                      <span className="text-[9px] text-gray-400 dark:text-gray-500 block">إضافات جديدة</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 bg-indigo-50/50 dark:bg-indigo-950/20 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/30 text-center">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400">المرضى</span>
+                    <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">{pendingImport.patientsCount}</span>
+                  </div>
+                  <div className="flex flex-col border-r border-l border-indigo-100 dark:border-indigo-900/40">
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400">السحبيات</span>
+                    <span className="text-sm font-black text-teal-600 dark:text-teal-400">{pendingImport.withdrawalsCount}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400">المصروفات</span>
+                    <span className="text-sm font-black text-purple-600 dark:text-purple-400">{pendingImport.expensesCount}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* خيارات الاستيراد التفاعلية */}
+              {pendingImport.currentPatientsCount > 0 ? (
+                <div className="flex flex-col gap-3 pt-1">
+                  {/* الخيار 1: الدمج الذكي */}
+                  <div className="p-3.5 rounded-2xl border-2 border-indigo-500/40 bg-indigo-50/30 dark:bg-indigo-950/30 flex flex-col gap-2 relative">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-[#5a55d2] text-white flex items-center justify-center shadow-xs">
+                          <GitMerge size={15} />
+                        </div>
+                        <span className="text-xs font-bold text-gray-800 dark:text-gray-100">الخيار 1: دمج البيانات الذكي</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-[#5a55d2] dark:text-indigo-300">
+                        موصى به
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-300 leading-relaxed pr-9">
+                      دمج الجلسات وتحديث بيانات المرضى المشتركين ({pendingImport.matchingPatientsCount}) دون حذف أو تكرار، وإضافة المرضى الجدد ({pendingImport.newPatientsCount})، مع صيانة الحسابات والملاحظات بأمان.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleExecuteMerge}
+                      className="w-full mt-1 py-2.5 px-4 rounded-xl bg-[#5a55d2] hover:bg-[#4843b8] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      <GitMerge size={15} />
+                      <span>تنفيذ دمج البيانات (دمج {pendingImport.matchingPatientsCount} + إضافة {pendingImport.newPatientsCount})</span>
+                    </button>
+                  </div>
+
+                  {/* الخيار 2: استبدال البيانات بالكامل */}
+                  <div className="p-3 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50/20 dark:bg-red-950/20 flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-red-100 dark:bg-red-900/60 text-red-600 dark:text-red-300 flex items-center justify-center">
+                        <AlertTriangle size={15} />
+                      </div>
+                      <span className="text-xs font-bold text-red-700 dark:text-red-300">الخيار 2: استبدال البيانات بالكامل</span>
+                    </div>
+                    <p className="text-[11px] text-red-600/80 dark:text-red-400/80 leading-relaxed pr-9">
+                      مسح كافة بيانات التطبيق الحالية ({pendingImport.currentPatientsCount} مريض) واستبدالها بالكامل ببيانات ملف النسخة ({pendingImport.patientsCount} مريض).
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleExecuteReplace}
+                      className="w-full mt-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      <AlertTriangle size={15} />
+                      <span>تأكيد واستبدال البيانات بالكامل</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* في حالة التطبيق فارغ تماماً */
+                <div className="flex flex-col gap-3 pt-1">
+                  <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs">
+                    التطبيق لا يحتوي على بيانات سابقة. سيتم استيراد كافة بيانات النسخة الاحتياطية مباشرة.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExecuteCleanImport}
+                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  >
+                    <Check size={16} />
+                    <span>استيراد كافة البيانات ({pendingImport.patientsCount} مريض)</span>
+                  </button>
+                </div>
+              )}
+
+              {/* زر الإلغاء في الأسفل */}
+              <div className="flex justify-end pt-1 border-t border-gray-100 dark:border-gray-700">
+                <button
+                  type="button"
+                  onClick={handleCancelImport}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors cursor-pointer"
+                >
+                  إلغاء وإغلاق
+                </button>
+              </div>
+
             </div>
           </div>
         )}
