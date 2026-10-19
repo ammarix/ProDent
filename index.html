@@ -10,33 +10,21 @@
     <meta property="og:type" content="website" />
     
     <!-- PWA & Mobile Web App Meta -->
-    <meta name="theme-color" content="#5a55d2" />
+    <meta name="theme-color" content="#0f1e47" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="ProDent" />
     
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="shortcut icon" href="/favicon.ico" />
-
-    <!-- Instant Dark Mode Init Script (Prevents flash of white) -->
-    <script>
-      (function() {
-        try {
-          var savedTheme = localStorage.getItem('@prodent_theme_v1');
-          if (savedTheme === 'dark') {
-            document.documentElement.classList.add('dark');
-          } else if (savedTheme === 'light') {
-            document.documentElement.classList.remove('dark');
-          } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            document.documentElement.classList.add('dark');
-          }
-        } catch (e) {}
-      })();
-    </script>
+    <!-- Authentic App Icons & Manifest with Cache Busting -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=5" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=5" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg?v=5" />
+    <link rel="shortcut icon" href="/favicon.ico?v=5" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=5" />
+    <link rel="manifest" href="/manifest.webmanifest?v=5" />
   </head>
-  <body class="bg-[#f8f9fc] dark:bg-gray-900 text-gray-900 dark:text-gray-100 antialiased selection:bg-indigo-100">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

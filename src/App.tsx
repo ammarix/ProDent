@@ -9,6 +9,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { saveBackupFile } from './services/storageHelper';
+import { idbGet, idbSet } from './services/dbStorage';
 
 // --- دوال مساعدة ---
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -175,7 +176,23 @@ const PatientCard = ({ patient, index, total, onPress, isCustomSort, onMoveUp, o
 // المكون الرئيسي (App)
 // ==========================================
 export default function App() {
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [patients, setPatients] = useState<Patient[]>(() => {
+    try {
+      const saved = localStorage.getItem('@patients_pro_data_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      const fallback = localStorage.getItem('@patients_pro_data_v2') || localStorage.getItem('@patients_pro_data');
+      if (fallback) {
+        const parsed = JSON.parse(fallback);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error('Error initializing patients from storage', e);
+    }
+    return [];
+  });
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
   const [paid, setPaid] = useState('');
@@ -238,12 +255,30 @@ export default function App() {
   const [showWithdrawals, setShowWithdrawals] = useState(false);
   const [highlightEditBtn, setHighlightEditBtn] = useState(false);
   
-  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>(() => {
+    try {
+      const savedWithdrawals = localStorage.getItem('@patients_withdrawals_v1');
+      if (savedWithdrawals) {
+        const parsed = JSON.parse(savedWithdrawals);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [withdrawalAmount, setWithdrawalAmount] = useState('');
   const [withdrawalNote, setWithdrawalNote] = useState('');
 
   const [showExpenses, setShowExpenses] = useState(false);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    try {
+      const savedExpenses = localStorage.getItem('@patients_expenses_v1');
+      if (savedExpenses) {
+        const parsed = JSON.parse(savedExpenses);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseNote, setExpenseNote] = useState('');
 
@@ -333,39 +368,83 @@ export default function App() {
   const showAlert = (message: string) => setDialog({ visible: true, message, type: 'alert', onConfirm: null });
   const showConfirm = (message: string, onConfirm: () => void) => setDialog({ visible: true, message, type: 'confirm', onConfirm });
 
+  // التحقق المزدوج من التخزين المحلي و IndexedDB لضمان بقاء البيانات حتى بدون إنترنت
   useEffect(() => {
-    const saved = localStorage.getItem('@patients_pro_data_v3');
-    if (saved) {
+    async function restoreFromOfflineDB() {
       try {
-        setPatients(JSON.parse(saved));
-      } catch (e) {
-        console.error('Error loading data', e);
+        if (patients.length === 0) {
+          const idbPatients = await idbGet<Patient[]>('@patients_pro_data_v3');
+          if (idbPatients && Array.isArray(idbPatients) && idbPatients.length > 0) {
+            setPatients(idbPatients);
+            localStorage.setItem('@patients_pro_data_v3', JSON.stringify(idbPatients));
+          }
+        }
+        if (withdrawals.length === 0) {
+          const idbW = await idbGet<Withdrawal[]>('@patients_withdrawals_v1');
+          if (idbW && Array.isArray(idbW) && idbW.length > 0) {
+            setWithdrawals(idbW);
+            localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(idbW));
+          }
+        }
+        if (expenses.length === 0) {
+          const idbE = await idbGet<Expense[]>('@patients_expenses_v1');
+          if (idbE && Array.isArray(idbE) && idbE.length > 0) {
+            setExpenses(idbE);
+            localStorage.setItem('@patients_expenses_v1', JSON.stringify(idbE));
+          }
+        }
+      } catch (err) {
+        console.warn('Offline IDB restore check completed:', err);
       }
     }
-    const savedWithdrawals = localStorage.getItem('@patients_withdrawals_v1');
-    if (savedWithdrawals) {
-      try { setWithdrawals(JSON.parse(savedWithdrawals)); } catch (e) {}
-    }
-    const savedExpenses = localStorage.getItem('@patients_expenses_v1');
-    if (savedExpenses) {
-      try { setExpenses(JSON.parse(savedExpenses)); } catch (e) {}
-    }
+    restoreFromOfflineDB();
   }, []);
 
+  const isInitialPatientsMount = useRef(true);
   useEffect(() => {
+    if (isInitialPatientsMount.current) {
+      isInitialPatientsMount.current = false;
+      if (patients.length > 0) {
+        idbSet('@patients_pro_data_v3', patients);
+      }
+      return;
+    }
     try {
       localStorage.setItem('@patients_pro_data_v3', JSON.stringify(patients));
+      idbSet('@patients_pro_data_v3', patients);
     } catch (e) {
       console.error('Error saving data', e);
     }
   }, [patients]);
 
+  const isInitialWithdrawalsMount = useRef(true);
   useEffect(() => {
-    try { localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(withdrawals)); } catch(e) {}
+    if (isInitialWithdrawalsMount.current) {
+      isInitialWithdrawalsMount.current = false;
+      if (withdrawals.length > 0) {
+        idbSet('@patients_withdrawals_v1', withdrawals);
+      }
+      return;
+    }
+    try {
+      localStorage.setItem('@patients_withdrawals_v1', JSON.stringify(withdrawals));
+      idbSet('@patients_withdrawals_v1', withdrawals);
+    } catch(e) {}
   }, [withdrawals]);
 
+  const isInitialExpensesMount = useRef(true);
   useEffect(() => {
-    try { localStorage.setItem('@patients_expenses_v1', JSON.stringify(expenses)); } catch(e) {}
+    if (isInitialExpensesMount.current) {
+      isInitialExpensesMount.current = false;
+      if (expenses.length > 0) {
+        idbSet('@patients_expenses_v1', expenses);
+      }
+      return;
+    }
+    try {
+      localStorage.setItem('@patients_expenses_v1', JSON.stringify(expenses));
+      idbSet('@patients_expenses_v1', expenses);
+    } catch(e) {}
   }, [expenses]);
 
   const handleExportData = async () => {
@@ -1130,7 +1209,10 @@ export default function App() {
         
         <header className="bg-[#5a55d2] text-white py-3 px-4 rounded-b-3xl shadow-lg z-50 relative shrink-0">
           <div className="flex justify-between items-center">
-            <h1 className="text-lg font-bold flex items-center gap-1">إدارة عيادة الأسنان 🦷</h1>
+            <h1 className="text-lg font-bold flex items-center gap-2.5">
+              <img src="/pwa-192x192.png?v=5" alt="ProDent" className="w-8 h-8 rounded-lg object-contain drop-shadow-sm shrink-0" />
+              <span>إدارة عيادة الأسنان</span>
+            </h1>
             <div className="relative">
               <button onClick={() => setShowAppSettings(!showAppSettings)} className="bg-white/20 dark:bg-gray-800/20 p-1.5 rounded-xl backdrop-blur-sm hover:bg-white/30 dark:hover:bg-gray-800/30 transition-colors">
                 <MoreVertical size={20} className="text-white" />
@@ -1138,7 +1220,7 @@ export default function App() {
               {showAppSettings && (
                 <>
                   <div className="fixed inset-0 z-[105]" onClick={() => setShowAppSettings(false)}></div>
-                  <div className="absolute left-0 top-10 w-44 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1.5 z-[110] flex flex-col gap-0.5 animate-fade-in text-gray-800 dark:text-gray-200">
+                  <div className="absolute left-0 top-10 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1.5 z-[110] flex flex-col gap-0.5 animate-fade-in text-gray-800 dark:text-gray-200">
                     <button onClick={() => {setIsDarkMode(!isDarkMode); setShowAppSettings(false);}} className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium">
                       {isDarkMode ? <Sun size={14} className="text-amber-400"/> : <Moon size={14} className="text-indigo-500" />}
                       <span>{isDarkMode ? 'الوضع المضيء' : 'الوضع المظلم'}</span>

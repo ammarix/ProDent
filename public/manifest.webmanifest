@@ -1,0 +1,40 @@
+{
+  "id": "/",
+  "name": "ProDent - إدارة عيادة الأسنان",
+  "short_name": "ProDent",
+  "description": "نظام شامل لإدارة عيادات الأسنان وحسابات المرضى والمواعيد.",
+  "theme_color": "#0f1e47",
+  "background_color": "#0f1e47",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "/",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png?v=5",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png?v=5",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-192x192.png?v=5",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png?v=5",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
