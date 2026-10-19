@@ -5,8 +5,10 @@ import {
   ChevronUp, ChevronDown, Check, Calendar,
   Stethoscope, History, Edit2, FileText, FlaskConical,
   BarChart2, MoreHorizontal, Gift, Receipt, Undo, Star, MoreVertical, Download, Upload,
-  Moon, Sun, Wallet, Activity, CheckCircle2, Clock, XCircle, ArrowRightLeft, Filter, PieChart, ShoppingCart
+  Moon, Sun, Wallet, Activity, CheckCircle2, Clock, XCircle, ArrowRightLeft, Filter, PieChart, ShoppingCart,
+  Loader2
 } from 'lucide-react';
+import { saveBackupFile } from './services/storageHelper';
 
 // --- دوال مساعدة ---
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -301,7 +303,32 @@ export default function App() {
   // حالات جديدة للتحكم في واجهة السجل والنوافذ المنبثقة المخصصة
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const [dialog, setDialog] = useState<{ visible: boolean, message: string, type: 'alert' | 'confirm', onConfirm: (() => void) | null }>({ visible: false, message: '', type: 'alert', onConfirm: null });
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const THEME_STORAGE_KEY = '@prodent_theme_v1';
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'dark') return true;
+      if (saved === 'light') return false;
+      return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch (e) {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? 'dark' : 'light');
+    } catch (e) {
+      console.error('Error saving theme to localStorage', e);
+    }
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  const [isExporting, setIsExporting] = useState(false);
 
   const showAlert = (message: string) => setDialog({ visible: true, message, type: 'alert', onConfirm: null });
   const showConfirm = (message: string, onConfirm: () => void) => setDialog({ visible: true, message, type: 'confirm', onConfirm });
@@ -341,8 +368,15 @@ export default function App() {
     try { localStorage.setItem('@patients_expenses_v1', JSON.stringify(expenses)); } catch(e) {}
   }, [expenses]);
 
-  const handleExportData = () => {
+  const handleExportData = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
     try {
+      const dateObj = new Date();
+      const datePart = dateObj.toISOString().split('T')[0];
+      const timePart = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
+      const filename = `ProDent_${datePart}_${timePart}.json`;
+
       const dataToExport = {
         version: '1.2',
         exportDate: new Date().toISOString(),
@@ -350,24 +384,25 @@ export default function App() {
         withdrawals,
         expenses
       };
-      
-      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(dataToExport));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute('href', dataStr);
-      
-      const dateObj = new Date();
-      const datePart = dateObj.toISOString().split('T')[0];
-      const timePart = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
-      const filename = `DentPro_${datePart}_${timePart}.json`;
 
-      downloadAnchorNode.setAttribute('download', filename);
-      document.body.appendChild(downloadAnchorNode);
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
+      const jsonString = JSON.stringify(dataToExport, null, 2);
+
+      // تنفيـذ الحفظ الفعلي وانتظار اكتمال الكتابة بنجاح
+      const result = await saveBackupFile(filename, jsonString);
+
+      // لا يتم إغلاق القائمة وعرض الإشعار إلا بعد التأكد التام من نجاح الكتابة
       setShowAppSettings(false);
-      showAlert('تم تصدير البيانات بنجاح في ملف للنسخ الاحتياطي.');
-    } catch (error) {
-      showAlert('حدث خطأ أثناء التصدير.');
+      showAlert(`تم حفظ النسخة الاحتياطية بنجاح!\n📄 الملف: ${filename}\n📁 الوجهة: ${result.destination}`);
+    } catch (error: any) {
+      console.error('Export error:', error);
+      setShowAppSettings(false);
+      if (error?.message?.includes('إلغاء') || error?.name === 'AbortError') {
+        showAlert('تم إلغاء عملية حفظ النسخة الاحتياطية.');
+      } else {
+        showAlert(`حدث خطأ أثناء حفظ النسخة الاحتياطية:\n${error?.message || 'تعذر الوصول إلى مجلد التخزين'}`);
+      }
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -866,6 +901,216 @@ export default function App() {
     });
   }
 
+  const renderDashboardLandscape = () => {
+    return (
+      <div className="flex flex-col h-full bg-[#fbfbfe] dark:bg-gray-900/10 p-5 overflow-y-auto custom-slim-scrollbar gap-5 text-right" dir="rtl">
+        {/* ترحيب علوي */}
+        <div className="bg-white dark:bg-gray-800 p-4.5 rounded-2xl border border-indigo-100/50 dark:border-gray-700/50 shadow-sm relative overflow-hidden">
+          <div className="absolute top-0 right-0 h-1.5 w-full bg-[#5a55d2]"></div>
+          <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+            لوحة قياس العيادة التفاعلية 🦷
+          </h3>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 leading-relaxed">
+            مرحباً بك في واجهة إدارة عيادة الأسنان! اختر مريضاً من القائمة الجانبية لعرض وتعديل سجلاته وزياراته، أو استخدم الأدوات المالية والعمليات الحسابية الشاملة أدناه لتتبع أداء العيادة حالاً.
+          </p>
+        </div>
+
+        {/* شبكة الإحصائيات الشاملة */}
+        <div>
+          <h4 className="text-[11px] font-bold text-gray-450 dark:text-gray-500 mb-2 flex items-center gap-1.5 px-0.5">
+            <BarChart2 size={13} className="text-[#5a55d2]" /> الإحصائيات المالية والتقارير العامة للعيادة
+          </h4>
+          <div className="grid grid-cols-3 gap-2.5">
+            <div onClick={() => setReportModalType('cost')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-gray-500 font-bold mb-1 flex items-center gap-1">إجمالي الحالات <Info size={10} className="text-gray-400" /></p>
+              <p className="text-base font-black text-gray-800 dark:text-white truncate">{formatCurrency(totalSystemCost)}</p>
+            </div>
+            <div onClick={() => setReportModalType('paid')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-[#5a55d2] dark:text-indigo-400 font-bold mb-1 flex items-center gap-1">المقبوضات <Info size={10} className="text-indigo-300" /></p>
+              <p className="text-base font-black text-[#5a55d2] dark:text-indigo-450 truncate">{formatCurrency(totalSystemPaid)}</p>
+            </div>
+            <div onClick={() => setReportModalType('debts')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mb-1 flex items-center gap-1">الديون المتبقية <Info size={10} className="text-amber-300" /></p>
+              <p className="text-base font-black text-amber-600 dark:text-amber-400 truncate">{formatCurrency(totalSystemRemaining)}</p>
+            </div>
+            <div onClick={() => setReportModalType('lab')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-red-500 font-bold mb-1 flex items-center gap-1">مستحقات المعمل <Info size={10} className="text-red-300" /></p>
+              <p className="text-base font-black text-red-500 truncate">{formatCurrency(totalSystemLabCost)}</p>
+            </div>
+            <div onClick={() => setReportModalType('withdrawals')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-teal-600 dark:text-teal-400 font-bold mb-1 flex items-center gap-1">السحبيات العامة <Info size={10} className="text-teal-300" /></p>
+              <p className="text-base font-black text-teal-600 dark:text-teal-400 truncate">{formatCurrency(totalMonthWithdrawals)}</p>
+            </div>
+            <div onClick={() => setReportModalType('expenses')} className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-750 cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900/50 transition-all flex flex-col justify-center">
+              <p className="text-[10px] text-purple-600 dark:text-purple-400 font-bold mb-1 flex items-center gap-1">المصروفات العامة <Info size={10} className="text-purple-300" /></p>
+              <p className="text-base font-black text-purple-600 dark:text-purple-400 truncate">{formatCurrency(totalMonthExpenses)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* صافي الإيراد التشغيلي للعيادة */}
+        <div className="bg-emerald-500 text-white rounded-2xl p-4 shadow-sm border border-emerald-600 flex justify-between items-center transition-all">
+          <div className="flex flex-col">
+            <span className="text-[11px] font-bold text-emerald-100">صافي المردود والربح الفعلي للعيادة (بعد كافة التكاليف)</span>
+            <span className="text-[9px] text-emerald-100/70 mt-1">المعادلة: المقبوضات - مستحقات المعمل - المصاريف - السحبيات</span>
+          </div>
+          <span className="text-lg font-black">{formatCurrency(totalSystemPaid - totalSystemLabCost - totalMonthExpenses - totalMonthWithdrawals)}</span>
+        </div>
+
+        {/* لوحة الأدوات المفتوحة */}
+        <div className="grid grid-cols-2 gap-4">
+          
+          {/* حاسبة النسبة الذكية للشريك الشريك مع خصم مستحقات المعمل */}
+          <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/50 shadow-sm flex flex-col gap-2.5">
+            <h4 className="text-[11px] font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5 border-b pb-2 dark:border-gray-700">
+              <Percent size={13} className="text-[#5a55d2]" /> حاسبة النسبة للشركاء والأطباء
+            </h4>
+            
+            <div className="flex items-center justify-between gap-1 bg-gray-50 dark:bg-gray-700/50 p-2 rounded-xl">
+              <div className="flex flex-col items-center flex-1 border-l border-gray-100 dark:border-gray-700">
+                <span className="text-[8px] text-gray-400 font-bold">المقبوضات</span>
+                <span className="text-[11px] font-bold text-[#5a55d2] dark:text-indigo-400">{formatCurrency(totalSystemPaid)}</span>
+              </div>
+              <div className="flex flex-col items-center flex-1">
+                <span className="text-[8px] text-red-500 font-bold">المعامل</span>
+                <span className="text-[11px] font-bold text-red-500">{formatCurrency(totalSystemLabCost)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <div className="flex items-center gap-1 bg-gray-50 dark:bg-gray-700 p-1.5 rounded-lg border border-gray-200 dark:border-gray-600 flex-1">
+                <Percent size={11} className="text-[#5a55d2]" />
+                <input type="number" value={calcPercent} onChange={(e) => setCalcPercent(e.target.value)} className="w-full text-center text-xs font-bold text-[#5a55d2] dark:text-indigo-400 bg-transparent outline-none" />
+              </div>
+              <div className="flex gap-1 flex-wrap justify-center shrink-0">
+                {[30, 40, 50, 60].map(pct => (
+                  <button key={pct} onClick={() => setCalcPercent(pct.toString())} className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all ${calcPercent === pct.toString() ? 'bg-[#5a55d2] text-white' : 'bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>{pct}%</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1 mt-1">
+               <button 
+                 onClick={() => setDeductLabCost(!deductLabCost)} 
+                 className={`w-full px-2 py-1.5 rounded-lg text-[9px] font-bold flex items-center justify-between transition-colors border ${deductLabCost ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-100 dark:border-red-900/30' : 'bg-white dark:bg-gray-850 text-gray-500 border-gray-150 dark:border-gray-700'}`}
+               >
+                 <span className="flex items-center gap-1"><FlaskConical size={10} /> خصم المعمل من الحسبة</span>
+                 <span>{deductLabCost ? 'نعم (مخصوم)' : 'لا'}</span>
+               </button>
+               <button 
+                 onClick={() => { setCalcFromRemaining(!calcFromRemaining); if (!calcFromRemaining) setCalcFromTotal(false); }} 
+                 className={`w-full px-2 py-1.5 rounded-lg text-[9px] font-bold flex items-center justify-between transition-colors border ${calcFromRemaining ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-900/30' : 'bg-white dark:bg-gray-850 text-gray-500 border-gray-150 dark:border-gray-700'}`}
+               >
+                 <span className="flex items-center gap-1"><Calculator size={10} /> حساب من المتبقي (الديون)</span>
+                 <span>{calcFromRemaining ? 'نعم' : 'لا (من المدفوع)'}</span>
+               </button>
+               <button 
+                 onClick={() => { setCalcFromTotal(!calcFromTotal); if (!calcFromTotal) setCalcFromRemaining(false); }} 
+                 className={`w-full px-2 py-1.5 rounded-lg text-[9px] font-bold flex items-center justify-between transition-colors border ${calcFromTotal ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-[#5a55d2] dark:text-indigo-300 border-indigo-100 dark:border-indigo-900/30' : 'bg-white dark:bg-gray-850 text-gray-500 border-gray-150 dark:border-gray-700'}`}
+               >
+                 <span className="flex items-center gap-1"><Calculator size={10} /> حساب من إجمالي التكلفة الكلية</span>
+                 <span>{calcFromTotal ? 'نعم' : 'لا'}</span>
+               </button>
+               <button 
+                 onClick={() => setDeductWithdrawals(!deductWithdrawals)} 
+                 className={`w-full px-2 py-1.5 rounded-lg text-[9px] font-bold flex items-center justify-between transition-colors border ${deductWithdrawals ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 border-orange-100 dark:border-orange-900/30' : 'bg-white dark:bg-gray-850 text-gray-500 border-gray-150 dark:border-gray-700'}`}
+               >
+                 <span className="flex items-center gap-1"><Wallet size={10} /> خصم السحبيات العامة من الحسبة</span>
+                 <span>{deductWithdrawals ? 'نعم' : 'لا'}</span>
+               </button>
+            </div>
+
+            <div className="bg-[#5a55d2] text-white rounded-xl p-2.5 flex justify-between items-center shadow-inner mt-1">
+              <span className="text-[10px] font-bold">الصافي للشريك المستحق:</span>
+              <span className="text-xs font-black">{formatCurrency((((calcFromTotal ? totalSystemCost : calcFromRemaining ? totalSystemRemaining : totalSystemPaid) - (deductLabCost ? totalSystemLabCost : 0)) * (parseFloat(calcPercent) || 0) / 100) - (deductWithdrawals ? totalMonthWithdrawals : 0))}</span>
+            </div>
+          </div>
+
+          {/* سجل السحبيات والصرفيات side-by-side */}
+          <div className="flex flex-col gap-2.5">
+            {/* السحبيات */}
+            <div className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl border border-gray-100 dark:border-gray-700/50 shadow-sm flex flex-col gap-1.5">
+              <h4 className="text-[11px] font-bold text-teal-600 dark:text-teal-400 flex items-center justify-between border-b pb-1.5 dark:border-gray-700">
+                <span className="flex items-center gap-1"><Wallet size={13} /> سحبيات ونقديات عامة</span>
+                <span className="text-[9px] font-black bg-teal-50 dark:bg-teal-900/20 text-teal-600 px-1.5 py-0.5 rounded">{formatCurrency(totalMonthWithdrawals)}</span>
+              </h4>
+              <div className="flex gap-1 pt-0.5">
+                <input 
+                  type="text" 
+                  inputMode="decimal"
+                  placeholder="مبلغ" 
+                  value={withdrawalAmount} 
+                  onChange={(e) => setWithdrawalAmount(parseAmount(e.target.value))} 
+                  className="w-14 text-center text-[10px] border border-gray-200 dark:border-gray-600 rounded-lg p-1 bg-gray-50 dark:bg-gray-700 dark:text-white"
+                />
+                <input 
+                  type="text" 
+                  placeholder="ملاحظات..." 
+                  value={withdrawalNote} 
+                  onChange={(e) => setWithdrawalNote(e.target.value)} 
+                  className="flex-1 text-[10px] border border-gray-200 dark:border-gray-600 rounded-lg p-1 bg-gray-50 dark:bg-gray-700 dark:text-white"
+                />
+                <button onClick={handleAddWithdrawal} className="bg-teal-500 hover:bg-teal-600 text-white font-bold p-1 px-2.5 rounded-lg text-[10px] shrink-0">إضافة</button>
+              </div>
+              {withdrawals.length > 0 ? (
+                <div className="flex flex-col gap-1 max-h-16 overflow-y-auto mt-1 custom-slim-scrollbar">
+                  {withdrawals.slice(0, 3).map(w => (
+                    <div key={w.id} className="flex justify-between items-center p-1 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-750 text-[10px]">
+                      <span className="font-bold text-gray-800 dark:text-gray-200 truncate">{formatCurrency(w.amount)} <span className="text-[9px] text-gray-500 font-normal">({w.note || 'سحب'})</span></span>
+                      <button onClick={() => handleDeleteWithdrawal(w.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[9px] text-gray-400 text-center py-1">لا يوجد سحبيات</p>
+              )}
+            </div>
+
+            {/* الصرفيات */}
+            <div className="bg-white dark:bg-gray-800 p-3.5 rounded-2xl border border-gray-100 dark:border-gray-700/50 shadow-sm flex flex-col gap-1.5">
+              <h4 className="text-[11px] font-bold text-purple-600 dark:text-purple-400 flex items-center justify-between border-b pb-1.5 dark:border-gray-700">
+                <span className="flex items-center gap-1"><ShoppingCart size={13} /> صرفيات ومستلزمات العيادة</span>
+                <span className="text-[9px] font-black bg-purple-50 dark:bg-purple-900/20 text-purple-600 px-1.5 py-0.5 rounded">{formatCurrency(totalMonthExpenses)}</span>
+              </h4>
+              <div className="flex gap-1 pt-0.5">
+                <input 
+                  type="text" 
+                  inputMode="decimal"
+                  placeholder="مبلغ" 
+                  value={expenseAmount} 
+                  onChange={(e) => setExpenseAmount(parseAmount(e.target.value))} 
+                  className="w-14 text-center text-[10px] border border-gray-200 dark:border-gray-600 rounded-lg p-1 bg-gray-50 dark:bg-gray-700 dark:text-white"
+                />
+                <input 
+                  type="text" 
+                  placeholder="مشتريات/شراء..." 
+                  value={expenseNote} 
+                  onChange={(e) => setExpenseNote(e.target.value)} 
+                  className="flex-1 text-[10px] border border-gray-200 dark:border-gray-600 rounded-lg p-1 bg-gray-50 dark:bg-gray-700 dark:text-white"
+                />
+                <button onClick={handleAddExpense} className="bg-purple-500 hover:bg-purple-600 text-white font-bold p-1 px-2.5 rounded-lg text-[10px] shrink-0">إضافة</button>
+              </div>
+              {expenses.length > 0 ? (
+                <div className="flex flex-col gap-1 max-h-16 overflow-y-auto mt-1 custom-slim-scrollbar">
+                  {expenses.slice(0, 3).map(e => (
+                    <div key={e.id} className="flex justify-between items-center p-1 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-750 text-[10px]">
+                      <span className="font-bold text-gray-800 dark:text-gray-200 truncate">{formatCurrency(e.amount)} <span className="text-[9px] text-gray-500 font-normal">({e.note || 'مادة'})</span></span>
+                      <button onClick={() => handleDeleteExpense(e.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[9px] text-gray-400 text-center py-1">لا يوجد صرفيات</p>
+              )}
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    );
+  };
+
   const getReportData = () => {
     switch(reportModalType) {
       case 'debts': return patients.filter(p => (p.remaining||0) > 0).map(p => ({...p, val: formatCurrency(p.remaining), label: 'متبقي'}));
@@ -880,8 +1125,8 @@ export default function App() {
   const reportData = getReportData();
 
   return (
-    <div dir="rtl" className={`min-h-screen ${isDarkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-[#f8f9fc] text-gray-900'} font-sans text-right flex justify-center selection:bg-indigo-100 transition-colors duration-300`}>
-      <div className={`w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white dark:bg-gray-800'} min-h-screen relative shadow-2xl overflow-hidden flex flex-col transition-colors duration-300`}>
+    <div dir="rtl" className={`min-h-screen ${isDarkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-[#f8f9fc] text-gray-900'} font-sans text-right flex justify-center lg:items-center selection:bg-indigo-100 transition-colors duration-300`}>
+      <div className={`w-full max-w-md lg:max-w-5xl xl:max-w-6xl ${isDarkMode ? 'bg-gray-800' : 'bg-white dark:bg-gray-800'} min-h-screen lg:min-h-0 lg:h-[92vh] lg:rounded-3xl relative shadow-2xl overflow-hidden flex flex-col transition-colors duration-300`}>
         
         <header className="bg-[#5a55d2] text-white py-3 px-4 rounded-b-3xl shadow-lg z-50 relative shrink-0">
           <div className="flex justify-between items-center">
@@ -893,16 +1138,21 @@ export default function App() {
               {showAppSettings && (
                 <>
                   <div className="fixed inset-0 z-[105]" onClick={() => setShowAppSettings(false)}></div>
-                  <div className="absolute left-0 top-10 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1.5 z-[110] flex flex-col gap-0.5 animate-fade-in text-gray-800 dark:text-gray-200">
-                    <button onClick={() => {setIsDarkMode(!isDarkMode); setShowAppSettings(false);}} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                  <div className="absolute left-0 top-10 w-44 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1.5 z-[110] flex flex-col gap-0.5 animate-fade-in text-gray-800 dark:text-gray-200">
+                    <button onClick={() => {setIsDarkMode(!isDarkMode); setShowAppSettings(false);}} className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium">
                       {isDarkMode ? <Sun size={14} className="text-amber-400"/> : <Moon size={14} className="text-indigo-500" />}
-                      {isDarkMode ? 'الوضع المضيء' : 'الوضع المظلم'}
+                      <span>{isDarkMode ? 'الوضع المضيء' : 'الوضع المظلم'}</span>
                     </button>
                     <div className="h-px bg-gray-100 dark:bg-gray-700 my-0.5"></div>
-                    <button onClick={handleExportData} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                      <Download size={14} className="text-emerald-500" /> تصدير البيانات
+                    <button 
+                      onClick={handleExportData} 
+                      disabled={isExporting}
+                      className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 font-medium"
+                    >
+                      {isExporting ? <Loader2 size={14} className="animate-spin text-emerald-500" /> : <Download size={14} className="text-emerald-500" />}
+                      <span>{isExporting ? 'جاري التصدير...' : 'تصدير البيانات'}</span>
                     </button>
-                    <button onClick={() => { fileInputRef.current?.click(); setShowAppSettings(false); }} className="text-xs px-2 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                    <button onClick={() => { fileInputRef.current?.click(); setShowAppSettings(false); }} className="text-xs px-2.5 py-2 rounded-lg text-right flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium">
                       <Upload size={14} className="text-blue-500" /> استيراد البيانات
                     </button>
                   </div>
@@ -919,7 +1169,11 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 -mt-4 pb-20 z-20">
+        <div className="flex-grow flex-1 flex flex-col lg:flex-row overflow-hidden relative min-h-0 w-full">
+          
+          {/* العمود الأيمن (قائمة وجدول إضافة المرضى للتابلت والنسخة العادية) */}
+          <div className="flex-1 lg:flex-none lg:w-[410px] flex flex-col h-full overflow-hidden w-full lg:border-l border-gray-150 dark:border-gray-700/50">
+            <main className="flex-grow flex-1 overflow-y-auto px-4 lg:px-3 -mt-4 lg:mt-0 pt-6 lg:pt-3 pb-20 z-20 relative">
           
           {/* إضافة مريض */}
           <div className="bg-white dark:bg-gray-800 p-3 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-4 mt-6 relative">
@@ -1353,13 +1607,19 @@ export default function App() {
             )}
           </div>
         </main>
+          </div>
+
+          {/* العمود الأيسر الافتراضي للتابلت والشاشات الكبيرة (لوحة القياس والتحليلات) */}
+          <div className="hidden lg:flex flex-1 flex-col h-full bg-[#fcfcff] dark:bg-gray-900/10 overflow-hidden border-r border-gray-100 dark:border-gray-850">
+             {!selectedPatient && renderDashboardLandscape()}
+          </div>
 
         {/* ==========================================
-            نافذة تفاصيل المريض المتقدمة
+            نافذة تفاصيل المريض المتقدمة والتفاعلية (تتحول لعمود أيسر تلقائي في التابلت)
         ========================================== */}
         {selectedPatient && (
-          <div className="absolute inset-0 z-[100] bg-black/40 flex justify-center items-end sm:items-center sm:p-4 backdrop-blur-sm" onClick={() => { setSelectedPatient(null); setIsEditingPatientDetails(false); }}>
-            <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[92vh]" onClick={e => e.stopPropagation()}>
+          <div className="absolute inset-0 z-[100] bg-black/40 flex justify-center items-end sm:items-center sm:p-4 backdrop-blur-sm lg:static lg:bg-transparent lg:backdrop-blur-none lg:p-0 lg:flex-1 lg:h-full lg:z-0 lg:pointer-events-auto" onClick={() => { setSelectedPatient(null); setIsEditingPatientDetails(false); }}>
+            <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[92vh] lg:max-w-none lg:rounded-none lg:shadow-none lg:h-full lg:max-h-none border-r border-gray-100 dark:border-gray-750/30" onClick={e => e.stopPropagation()}>
               
               <div className="flex justify-between items-center p-4 border-b">
                 <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 leading-normal flex items-center gap-2 flex-1 pl-4 pt-1">
@@ -1897,6 +2157,8 @@ export default function App() {
           </div>
         )}
 
+        </div> {/* نهاية حاوية التخطيط الأفقي المجزأ لشاشات التابلت والأجهزة اللوحية (flex-row) */}
+
         {/* نافذة تعديل المبالغ */}
         {showEditAmountsModal && selectedPatient && (
           <div className="absolute inset-0 z-[120] bg-black/50 flex justify-center items-center backdrop-blur-sm p-4" onClick={() => setShowEditAmountsModal(false)}>
@@ -2214,7 +2476,7 @@ export default function App() {
                 {dialog.type === 'confirm' ? <Info className="text-amber-500" size={20}/> : <Info className="text-indigo-500" size={20}/>}
                 {dialog.type === 'confirm' ? 'تأكيد الإجراء' : 'تنبيه'}
               </h3>
-              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{dialog.message}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed whitespace-pre-line">{dialog.message}</p>
               <div className="flex justify-end gap-2 mt-2">
                 <button onClick={() => setDialog({ ...dialog, visible: false, message: '', type: 'alert', onConfirm: null })} className="px-5 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl text-xs font-bold hover:bg-gray-200 dark:bg-gray-600 dark:hover:bg-gray-600 transition-colors">
                   {dialog.type === 'confirm' ? 'إلغاء' : 'حسناً فهمت'}
